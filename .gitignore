@@ -1,0 +1,5 @@
+data/raw/
+build/
+__pycache__/
+*.so
+.DS_Store
