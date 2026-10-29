@@ -22,5 +22,7 @@ FetchContent_Declare(catch2
 FetchContent_MakeAvailable(catch2)
 add_executable(router_tests cpp/tests/test_router.cpp)
 target_link_libraries(router_tests PRIVATE router Catch2::Catch2WithMain)
+target_compile_definitions(router_tests PRIVATE
+  TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/data/fixtures")
 enable_testing()
 add_test(NAME router_tests COMMAND router_tests)
