@@ -6,8 +6,6 @@
 #include <unordered_map>
 #include <vector>
 
-int32_t add_seconds(int32_t a, int32_t b);
-
 namespace transit {
 
 // Arrival time reported for stops that cannot be reached.

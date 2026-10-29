@@ -16,10 +16,6 @@ using transit::Timetable;
 //   E has no service.
 static Timetable tiny() { return Timetable::from_gtfs_dir(TEST_DATA_DIR "/tiny"); }
 
-TEST_CASE("add_seconds works") {
-    REQUIRE(add_seconds(30, 12) == 42);
-}
-
 TEST_CASE("parse_gtfs_time") {
     CHECK(parse_gtfs_time("08:00:00") == 8 * 3600);
     CHECK(parse_gtfs_time("8:05:30") == 8 * 3600 + 5 * 60 + 30);
