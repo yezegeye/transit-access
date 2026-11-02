@@ -15,6 +15,10 @@ constexpr int32_t kUnreachable = std::numeric_limits<int32_t>::max();
 // Hours may exceed 23 for trips that run past midnight.
 int32_t parse_gtfs_time(const std::string& text);
 
+// Parses a GTFS date ("YYYYMMDD") and returns it as the integer YYYYMMDD.
+// Throws std::invalid_argument for malformed or impossible dates.
+int32_t parse_gtfs_date(const std::string& text);
+
 // One vehicle hop between consecutive stops of a trip.
 struct Connection {
     int32_t dep_stop;

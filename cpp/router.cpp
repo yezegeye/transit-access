@@ -95,6 +95,14 @@ struct StopTime {
     int32_t departure;
 };
 
+
+bool is_leap_year(int year) { return (year % 4 == 0 && year % 100 != 0) || year % 400 == 0; }
+
+int days_in_month(int year, int month) {
+    static const int kDays[] = {31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
+    return month == 2 && is_leap_year(year) ? 29 : kDays[month - 1];
+}
+
 }  // namespace
 
 int32_t parse_gtfs_time(const std::string& text) {
@@ -108,6 +116,24 @@ int32_t parse_gtfs_time(const std::string& text) {
         throw std::invalid_argument("invalid GTFS time: '" + text + "'");
     }
     return h * 3600 + m * 60 + sec;
+}
+
+int32_t parse_gtfs_date(const std::string& text) {
+    const std::string s = trim(text);
+    const bool digits = s.size() == 8 && std::all_of(s.begin(), s.end(), [](char ch) {
+                            return ch >= '0' && ch <= '9';
+                        });
+    if (digits) {
+        const int32_t date = std::stoi(s);
+        const int year = date / 10000;
+        const int month = date / 100 % 100;
+        const int day = date % 100;
+        if (year >= 1 && month >= 1 && month <= 12 && day >= 1 &&
+            day <= days_in_month(year, month)) {
+            return date;
+        }
+    }
+    throw std::invalid_argument("invalid GTFS date: '" + text + "'");
 }
 
 int32_t Timetable::stop_index(const std::string& stop_id) const {

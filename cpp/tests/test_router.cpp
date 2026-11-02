@@ -5,6 +5,7 @@
 
 using transit::earliest_arrival;
 using transit::kUnreachable;
+using transit::parse_gtfs_date;
 using transit::parse_gtfs_time;
 using transit::Timetable;
 
@@ -121,4 +122,15 @@ TEST_CASE("GTFS parsing rejects bad input") {
     CHECK_THROWS_AS(load("stop_id\nA\n", header + "T,,,A,1\n"), std::runtime_error);  // no times
     CHECK_THROWS_AS(load("stop_id\nA\n", "trip_id,stop_id\n"), std::runtime_error);   // columns
     CHECK_THROWS_AS(Timetable::from_gtfs_dir("/nonexistent"), std::runtime_error);
+}
+
+TEST_CASE("parse_gtfs_date") {
+    CHECK(parse_gtfs_date("20261014") == 20261014);
+    CHECK(parse_gtfs_date(" 20240229 ") == 20240229);  // leap day
+    CHECK_THROWS_AS(parse_gtfs_date("20230229"), std::invalid_argument);  // not a leap year
+    CHECK_THROWS_AS(parse_gtfs_date("20261301"), std::invalid_argument);
+    CHECK_THROWS_AS(parse_gtfs_date("20261000"), std::invalid_argument);
+    CHECK_THROWS_AS(parse_gtfs_date("2026-10-14"), std::invalid_argument);
+    CHECK_THROWS_AS(parse_gtfs_date("2026101"), std::invalid_argument);
+    CHECK_THROWS_AS(parse_gtfs_date(""), std::invalid_argument);
 }
