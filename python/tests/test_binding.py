@@ -1,3 +1,4 @@
+import datetime
 from pathlib import Path
 
 import pytest
@@ -52,3 +53,25 @@ def test_errors(tt):
         tr.earliest_arrival(tt, "Z", 0)
     with pytest.raises(RuntimeError):
         tr.Timetable.from_gtfs_dir(TINY / "missing")
+
+
+@pytest.mark.parametrize("date", [datetime.date(2026, 10, 14), "20261014"])
+def test_service_day_accepts_date_or_string(date):
+    weekday = tr.Timetable.from_gtfs_dir(TINY, date=date)
+    assert weekday.num_connections == 3
+    assert tr.earliest_arrival(weekday, "A", t("08:01:00")) == {"A": t("08:01:00")}
+
+
+def test_service_day_filters_trips():
+    saturday = tr.Timetable.from_gtfs_dir(TINY, datetime.date(2026, 10, 17))
+    assert tr.earliest_arrival(saturday, "A", t("08:00:00")) == {
+        "A": t("08:00:00"),
+        "D": t("08:40:00"),
+    }
+    sunday = tr.Timetable.from_gtfs_dir(TINY, datetime.date(2026, 10, 18))
+    assert sunday.num_connections == 0
+
+
+def test_invalid_service_day():
+    with pytest.raises(ValueError):
+        tr.Timetable.from_gtfs_dir(TINY, "2026-10-14")
