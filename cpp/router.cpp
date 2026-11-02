@@ -103,6 +103,19 @@ int days_in_month(int year, int month) {
     return month == 2 && is_leap_year(year) ? 29 : kDays[month - 1];
 }
 
+// Day of the week of a valid YYYYMMDD date, 0 = Monday ... 6 = Sunday
+// (Sakamoto's method).
+int weekday(int32_t date) {
+    static const int kOffsets[] = {0, 3, 2, 5, 0, 3, 5, 1, 4, 6, 2, 4};
+    int year = date / 10000;
+    const int month = date / 100 % 100;
+    const int day = date % 100;
+    if (month < 3) --year;
+    const int from_sunday =
+        (year + year / 4 - year / 100 + year / 400 + kOffsets[month - 1] + day) % 7;
+    return (from_sunday + 6) % 7;
+}
+
 }  // namespace
 
 int32_t parse_gtfs_time(const std::string& text) {
@@ -134,6 +147,70 @@ int32_t parse_gtfs_date(const std::string& text) {
         }
     }
     throw std::invalid_argument("invalid GTFS date: '" + text + "'");
+}
+
+std::unordered_set<std::string> active_services(std::istream* calendar,
+                                                std::istream* calendar_dates, int32_t date) {
+    static const char* const kDayColumns[] = {"monday", "tuesday",  "wednesday", "thursday",
+                                              "friday", "saturday", "sunday"};
+    std::unordered_set<std::string> services;
+    std::vector<std::string> row;
+
+    if (calendar) {
+        CsvReader csv(*calendar, "calendar.txt");
+        const size_t id_col = csv.column("service_id");
+        const size_t day_col = csv.column(kDayColumns[weekday(date)]);
+        const size_t start_col = csv.column("start_date");
+        const size_t end_col = csv.column("end_date");
+        while (csv.next(row)) {
+            try {
+                if (row[day_col] == "1" && parse_gtfs_date(row[start_col]) <= date &&
+                    date <= parse_gtfs_date(row[end_col])) {
+                    services.insert(row[id_col]);
+                }
+            } catch (const std::invalid_argument& e) {
+                throw std::runtime_error(csv.where() + ": " + e.what());
+            }
+        }
+    }
+
+    if (calendar_dates) {
+        CsvReader csv(*calendar_dates, "calendar_dates.txt");
+        const size_t id_col = csv.column("service_id");
+        const size_t date_col = csv.column("date");
+        const size_t type_col = csv.column("exception_type");
+        while (csv.next(row)) {
+            int32_t exception_date = 0;
+            try {
+                exception_date = parse_gtfs_date(row[date_col]);
+            } catch (const std::invalid_argument& e) {
+                throw std::runtime_error(csv.where() + ": " + e.what());
+            }
+            if (exception_date != date) continue;
+            if (row[type_col] == "1") {
+                services.insert(row[id_col]);
+            } else if (row[type_col] == "2") {
+                services.erase(row[id_col]);
+            } else {
+                throw std::runtime_error(csv.where() + ": invalid exception_type '" +
+                                         row[type_col] + "'");
+            }
+        }
+    }
+    return services;
+}
+
+std::unordered_set<std::string> active_trips(std::istream& trips,
+                                             const std::unordered_set<std::string>& services) {
+    CsvReader csv(trips, "trips.txt");
+    const size_t trip_col = csv.column("trip_id");
+    const size_t service_col = csv.column("service_id");
+    std::unordered_set<std::string> active;
+    std::vector<std::string> row;
+    while (csv.next(row)) {
+        if (services.count(row[service_col])) active.insert(row[trip_col]);
+    }
+    return active;
 }
 
 int32_t Timetable::stop_index(const std::string& stop_id) const {

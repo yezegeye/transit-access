@@ -4,6 +4,7 @@
 #include <limits>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace transit {
@@ -18,6 +19,16 @@ int32_t parse_gtfs_time(const std::string& text);
 // Parses a GTFS date ("YYYYMMDD") and returns it as the integer YYYYMMDD.
 // Throws std::invalid_argument for malformed or impossible dates.
 int32_t parse_gtfs_date(const std::string& text);
+
+// service_ids that run on `date` (YYYYMMDD): calendar.txt weekday flags within
+// start_date..end_date, then calendar_dates.txt exceptions (1 adds, 2 removes).
+// Either stream may be null; GTFS requires at least one of the two files.
+std::unordered_set<std::string> active_services(std::istream* calendar,
+                                                std::istream* calendar_dates, int32_t date);
+
+// trip_ids in trips.txt whose service_id is in `services`.
+std::unordered_set<std::string> active_trips(std::istream& trips,
+                                             const std::unordered_set<std::string>& services);
 
 // One vehicle hop between consecutive stops of a trip.
 struct Connection {

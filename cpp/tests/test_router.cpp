@@ -3,6 +3,7 @@
 #include <stdexcept>
 #include "router.hpp"
 
+using transit::active_services;
 using transit::earliest_arrival;
 using transit::kUnreachable;
 using transit::parse_gtfs_date;
@@ -133,4 +134,42 @@ TEST_CASE("parse_gtfs_date") {
     CHECK_THROWS_AS(parse_gtfs_date("2026-10-14"), std::invalid_argument);
     CHECK_THROWS_AS(parse_gtfs_date("2026101"), std::invalid_argument);
     CHECK_THROWS_AS(parse_gtfs_date(""), std::invalid_argument);
+}
+
+TEST_CASE("active_services applies weekdays, date ranges and exceptions") {
+    const std::string calendar_txt =
+        "service_id,monday,tuesday,wednesday,thursday,friday,saturday,sunday,start_date,end_date\n"
+        "WK,1,1,1,1,1,0,0,20261001,20261031\n"
+        "SUN,0,0,0,0,0,0,1,20261001,20261031\n";
+    const std::string dates_txt =
+        "service_id,date,exception_type\n"
+        "WK,20261012,2\n"      // Monday: weekday service removed
+        "SPECIAL,20261012,1\n"  // and a special service added
+        "SUN,20261013,1\n";     // Tuesday: Sunday service added
+    const auto services = [&](int32_t date) {
+        std::istringstream calendar(calendar_txt), dates(dates_txt);
+        return active_services(&calendar, &dates, date);
+    };
+    using Set = std::unordered_set<std::string>;
+    CHECK(services(20261014) == Set{"WK"});                 // Wednesday
+    CHECK(services(20261018) == Set{"SUN"});                // Sunday
+    CHECK(services(20261017).empty());                      // Saturday
+    CHECK(services(20261001) == Set{"WK"});                 // start_date is inclusive
+    CHECK(services(20261031).empty());                      // end_date is a Saturday
+    CHECK(services(20261102).empty());                      // after end_date
+    CHECK(services(20261012) == Set{"SPECIAL"});            // removed + added
+    CHECK(services(20261013) == Set{"WK", "SUN"});          // added on top
+
+    SECTION("either file may be missing") {
+        std::istringstream calendar(calendar_txt), dates(dates_txt);
+        CHECK(active_services(&calendar, nullptr, 20261012) == Set{"WK"});
+        CHECK(active_services(nullptr, &dates, 20261012) == Set{"SPECIAL"});
+    }
+
+    SECTION("bad rows are rejected") {
+        std::istringstream bad_type("service_id,date,exception_type\nX,20261012,3\n");
+        CHECK_THROWS_AS(active_services(nullptr, &bad_type, 20261012), std::runtime_error);
+        std::istringstream bad_date("service_id,date,exception_type\nX,2026-10-12,1\n");
+        CHECK_THROWS_AS(active_services(nullptr, &bad_date, 20261012), std::runtime_error);
+    }
 }
