@@ -41,9 +41,16 @@ struct Connection {
 
 class Timetable {
 public:
-    // Reads stops.txt and stop_times.txt from a GTFS directory.
+    // Reads stops.txt and stop_times.txt from a GTFS directory. Every trip is
+    // loaded, whatever day it runs.
     static Timetable from_gtfs_dir(const std::string& dir);
+    // Loads only the trips running on `service_date` (YYYYMMDD), using
+    // trips.txt, calendar.txt and calendar_dates.txt.
+    static Timetable from_gtfs_dir(const std::string& dir, int32_t service_date);
     static Timetable from_gtfs(std::istream& stops, std::istream& stop_times);
+    // Rows of stop_times.txt whose trip_id is not in `trips` are skipped.
+    static Timetable from_gtfs(std::istream& stops, std::istream& stop_times,
+                               const std::unordered_set<std::string>& trips);
 
     int32_t num_stops() const { return static_cast<int32_t>(stop_ids_.size()); }
     const std::vector<std::string>& stop_ids() const { return stop_ids_; }
@@ -54,6 +61,9 @@ public:
     const std::vector<Connection>& connections() const { return connections_; }
 
 private:
+    static Timetable load(std::istream& stops, std::istream& stop_times,
+                          const std::unordered_set<std::string>* trips);
+
     std::vector<std::string> stop_ids_;
     std::unordered_map<std::string, int32_t> stop_index_;
     std::vector<Connection> connections_;

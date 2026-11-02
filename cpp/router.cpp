@@ -95,7 +95,6 @@ struct StopTime {
     int32_t departure;
 };
 
-
 bool is_leap_year(int year) { return (year % 4 == 0 && year % 100 != 0) || year % 400 == 0; }
 
 int days_in_month(int year, int month) {
@@ -114,6 +113,13 @@ int weekday(int32_t date) {
     const int from_sunday =
         (year + year / 4 - year / 100 + year / 400 + kOffsets[month - 1] + day) % 7;
     return (from_sunday + 6) % 7;
+}
+
+std::ifstream open_gtfs_file(const std::string& dir, const std::string& name) {
+    const std::string path = dir + "/" + name;
+    std::ifstream file(path);
+    if (!file) throw std::runtime_error("cannot open " + path);
+    return file;
 }
 
 }  // namespace
@@ -220,16 +226,39 @@ int32_t Timetable::stop_index(const std::string& stop_id) const {
 }
 
 Timetable Timetable::from_gtfs_dir(const std::string& dir) {
-    const std::string stops_path = dir + "/stops.txt";
-    const std::string stop_times_path = dir + "/stop_times.txt";
-    std::ifstream stops(stops_path);
-    if (!stops) throw std::runtime_error("cannot open " + stops_path);
-    std::ifstream stop_times(stop_times_path);
-    if (!stop_times) throw std::runtime_error("cannot open " + stop_times_path);
+    std::ifstream stops = open_gtfs_file(dir, "stops.txt");
+    std::ifstream stop_times = open_gtfs_file(dir, "stop_times.txt");
     return from_gtfs(stops, stop_times);
 }
 
+Timetable Timetable::from_gtfs_dir(const std::string& dir, int32_t service_date) {
+    std::ifstream calendar(dir + "/calendar.txt");
+    std::ifstream calendar_dates(dir + "/calendar_dates.txt");
+    if (!calendar && !calendar_dates) {
+        throw std::runtime_error(dir + ": needs calendar.txt or calendar_dates.txt");
+    }
+    const auto services = active_services(calendar ? &calendar : nullptr,
+                                          calendar_dates ? &calendar_dates : nullptr,
+                                          service_date);
+    std::ifstream trips_file = open_gtfs_file(dir, "trips.txt");
+    const auto trips = active_trips(trips_file, services);
+
+    std::ifstream stops = open_gtfs_file(dir, "stops.txt");
+    std::ifstream stop_times = open_gtfs_file(dir, "stop_times.txt");
+    return from_gtfs(stops, stop_times, trips);
+}
+
 Timetable Timetable::from_gtfs(std::istream& stops, std::istream& stop_times) {
+    return load(stops, stop_times, nullptr);
+}
+
+Timetable Timetable::from_gtfs(std::istream& stops, std::istream& stop_times,
+                               const std::unordered_set<std::string>& trips) {
+    return load(stops, stop_times, &trips);
+}
+
+Timetable Timetable::load(std::istream& stops, std::istream& stop_times,
+                          const std::unordered_set<std::string>* trips) {
     Timetable tt;
     std::vector<std::string> row;
 
@@ -254,6 +283,7 @@ Timetable Timetable::from_gtfs(std::istream& stops, std::istream& stop_times) {
     std::unordered_map<std::string, int32_t> trip_index;
     std::vector<StopTime> rows;
     while (times_csv.next(row)) {
+        if (trips && !trips->count(row[trip_col])) continue;
         const auto stop = tt.stop_index_.find(row[stop_col]);
         if (stop == tt.stop_index_.end()) {
             throw std::runtime_error(times_csv.where() + ": unknown stop_id " + row[stop_col]);

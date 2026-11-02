@@ -11,12 +11,18 @@ using transit::parse_gtfs_time;
 using transit::Timetable;
 
 // data/fixtures/tiny:
-//   T1  A 08:00 -> B 08:10 (dep 08:12) -> C 08:20
-//   T2  B 08:15 -> D 08:25
-//   T3  A 08:05 -> D 08:40            (rows listed out of sequence order)
-//   T4  C 08:30 -> D 08:35
+//   T1  A 08:00 -> B 08:10 (dep 08:12) -> C 08:20   WEEKDAY
+//   T2  B 08:15 -> D 08:25                          WEEKDAY
+//   T3  A 08:05 -> D 08:40  (rows out of order)     SATURDAY
+//   T4  C 08:30 -> D 08:35                          HOLIDAY
 //   E has no service.
+// WEEKDAY and SATURDAY run all of 2026 (calendar.txt). On 2026-11-26
+// (Thanksgiving, a Thursday) WEEKDAY is removed and HOLIDAY added
+// (calendar_dates.txt).
 static Timetable tiny() { return Timetable::from_gtfs_dir(TEST_DATA_DIR "/tiny"); }
+static Timetable tiny_on(int32_t date) {
+    return Timetable::from_gtfs_dir(TEST_DATA_DIR "/tiny", date);
+}
 
 TEST_CASE("parse_gtfs_time") {
     CHECK(parse_gtfs_time("08:00:00") == 8 * 3600);
@@ -123,6 +129,7 @@ TEST_CASE("GTFS parsing rejects bad input") {
     CHECK_THROWS_AS(load("stop_id\nA\n", header + "T,,,A,1\n"), std::runtime_error);  // no times
     CHECK_THROWS_AS(load("stop_id\nA\n", "trip_id,stop_id\n"), std::runtime_error);   // columns
     CHECK_THROWS_AS(Timetable::from_gtfs_dir("/nonexistent"), std::runtime_error);
+    CHECK_THROWS_AS(Timetable::from_gtfs_dir("/nonexistent", 20261014), std::runtime_error);
 }
 
 TEST_CASE("parse_gtfs_date") {
@@ -171,5 +178,42 @@ TEST_CASE("active_services applies weekdays, date ranges and exceptions") {
         CHECK_THROWS_AS(active_services(nullptr, &bad_type, 20261012), std::runtime_error);
         std::istringstream bad_date("service_id,date,exception_type\nX,2026-10-12,1\n");
         CHECK_THROWS_AS(active_services(nullptr, &bad_date, 20261012), std::runtime_error);
+    }
+}
+
+TEST_CASE("loading a service day keeps only the trips running that day") {
+    const auto at = [](const Timetable& tt, const std::vector<int32_t>& arr, const char* stop) {
+        return arr[tt.stop_index(stop)];
+    };
+
+    SECTION("Wednesday: weekday trips only, so A -> D goes T1 then T2") {
+        const Timetable tt = tiny_on(20261014);
+        CHECK(tt.num_stops() == 5);  // stops are kept even without service
+        CHECK(tt.connections().size() == 3);
+        const auto arr = earliest_arrival(tt, tt.stop_index("A"), parse_gtfs_time("08:00:00"));
+        CHECK(at(tt, arr, "D") == parse_gtfs_time("08:25:00"));
+        // Without T3 there is no later way out of A.
+        const auto late = earliest_arrival(tt, tt.stop_index("A"), parse_gtfs_time("08:01:00"));
+        CHECK(at(tt, late, "D") == kUnreachable);
+    }
+
+    SECTION("Saturday: only the direct trip T3") {
+        const Timetable tt = tiny_on(20261017);
+        CHECK(tt.connections().size() == 1);
+        const auto arr = earliest_arrival(tt, tt.stop_index("A"), parse_gtfs_time("08:00:00"));
+        CHECK(at(tt, arr, "B") == kUnreachable);
+        CHECK(at(tt, arr, "D") == parse_gtfs_time("08:40:00"));
+    }
+
+    SECTION("Thanksgiving: weekday service replaced by the holiday trip") {
+        const Timetable tt = tiny_on(20261126);
+        CHECK(tt.connections().size() == 1);
+        const auto arr = earliest_arrival(tt, tt.stop_index("C"), parse_gtfs_time("08:00:00"));
+        CHECK(at(tt, arr, "D") == parse_gtfs_time("08:35:00"));
+    }
+
+    SECTION("no service on Sunday or outside the calendar range") {
+        CHECK(tiny_on(20261018).connections().empty());
+        CHECK(tiny_on(20270104).connections().empty());
     }
 }
