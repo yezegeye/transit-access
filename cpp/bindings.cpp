@@ -26,11 +26,19 @@ PYBIND11_MODULE(transit_router, m) {
     py::class_<Timetable>(m, "Timetable")
         .def_static(
             "from_gtfs_dir",
-            [](const py::object& path) {
+            [](const py::object& path, const py::object& date) {
                 const auto dir = py::module_::import("os").attr("fspath")(path).cast<std::string>();
-                return Timetable::from_gtfs_dir(dir);
+                if (date.is_none()) return Timetable::from_gtfs_dir(dir);
+                // Accept a datetime.date (or datetime) as well as a "YYYYMMDD" string.
+                const std::string text = py::hasattr(date, "strftime")
+                                             ? date.attr("strftime")("%Y%m%d").cast<std::string>()
+                                             : py::str(date).cast<std::string>();
+                return Timetable::from_gtfs_dir(dir, transit::parse_gtfs_date(text));
             },
-            py::arg("path"), "Load stops.txt and stop_times.txt from a GTFS directory.")
+            py::arg("path"), py::arg("date") = py::none(),
+            "Load a GTFS directory. With `date` (a datetime.date or 'YYYYMMDD'),\n"
+            "only trips running on that service day are loaded, using trips.txt,\n"
+            "calendar.txt and calendar_dates.txt; without it every trip is loaded.")
         .def_property_readonly("num_stops", &Timetable::num_stops)
         .def_property_readonly("num_connections",
                                [](const Timetable& tt) { return tt.connections().size(); })

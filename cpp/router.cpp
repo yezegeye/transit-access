@@ -95,6 +95,33 @@ struct StopTime {
     int32_t departure;
 };
 
+bool is_leap_year(int year) { return (year % 4 == 0 && year % 100 != 0) || year % 400 == 0; }
+
+int days_in_month(int year, int month) {
+    static const int kDays[] = {31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
+    return month == 2 && is_leap_year(year) ? 29 : kDays[month - 1];
+}
+
+// Day of the week of a valid YYYYMMDD date, 0 = Monday ... 6 = Sunday
+// (Sakamoto's method).
+int weekday(int32_t date) {
+    static const int kOffsets[] = {0, 3, 2, 5, 0, 3, 5, 1, 4, 6, 2, 4};
+    int year = date / 10000;
+    const int month = date / 100 % 100;
+    const int day = date % 100;
+    if (month < 3) --year;
+    const int from_sunday =
+        (year + year / 4 - year / 100 + year / 400 + kOffsets[month - 1] + day) % 7;
+    return (from_sunday + 6) % 7;
+}
+
+std::ifstream open_gtfs_file(const std::string& dir, const std::string& name) {
+    const std::string path = dir + "/" + name;
+    std::ifstream file(path);
+    if (!file) throw std::runtime_error("cannot open " + path);
+    return file;
+}
+
 }  // namespace
 
 int32_t parse_gtfs_time(const std::string& text) {
@@ -110,6 +137,88 @@ int32_t parse_gtfs_time(const std::string& text) {
     return h * 3600 + m * 60 + sec;
 }
 
+int32_t parse_gtfs_date(const std::string& text) {
+    const std::string s = trim(text);
+    const bool digits = s.size() == 8 && std::all_of(s.begin(), s.end(), [](char ch) {
+                            return ch >= '0' && ch <= '9';
+                        });
+    if (digits) {
+        const int32_t date = std::stoi(s);
+        const int year = date / 10000;
+        const int month = date / 100 % 100;
+        const int day = date % 100;
+        if (year >= 1 && month >= 1 && month <= 12 && day >= 1 &&
+            day <= days_in_month(year, month)) {
+            return date;
+        }
+    }
+    throw std::invalid_argument("invalid GTFS date: '" + text + "'");
+}
+
+std::unordered_set<std::string> active_services(std::istream* calendar,
+                                                std::istream* calendar_dates, int32_t date) {
+    static const char* const kDayColumns[] = {"monday", "tuesday",  "wednesday", "thursday",
+                                              "friday", "saturday", "sunday"};
+    std::unordered_set<std::string> services;
+    std::vector<std::string> row;
+
+    if (calendar) {
+        CsvReader csv(*calendar, "calendar.txt");
+        const size_t id_col = csv.column("service_id");
+        const size_t day_col = csv.column(kDayColumns[weekday(date)]);
+        const size_t start_col = csv.column("start_date");
+        const size_t end_col = csv.column("end_date");
+        while (csv.next(row)) {
+            try {
+                if (row[day_col] == "1" && parse_gtfs_date(row[start_col]) <= date &&
+                    date <= parse_gtfs_date(row[end_col])) {
+                    services.insert(row[id_col]);
+                }
+            } catch (const std::invalid_argument& e) {
+                throw std::runtime_error(csv.where() + ": " + e.what());
+            }
+        }
+    }
+
+    if (calendar_dates) {
+        CsvReader csv(*calendar_dates, "calendar_dates.txt");
+        const size_t id_col = csv.column("service_id");
+        const size_t date_col = csv.column("date");
+        const size_t type_col = csv.column("exception_type");
+        while (csv.next(row)) {
+            int32_t exception_date = 0;
+            try {
+                exception_date = parse_gtfs_date(row[date_col]);
+            } catch (const std::invalid_argument& e) {
+                throw std::runtime_error(csv.where() + ": " + e.what());
+            }
+            if (exception_date != date) continue;
+            if (row[type_col] == "1") {
+                services.insert(row[id_col]);
+            } else if (row[type_col] == "2") {
+                services.erase(row[id_col]);
+            } else {
+                throw std::runtime_error(csv.where() + ": invalid exception_type '" +
+                                         row[type_col] + "'");
+            }
+        }
+    }
+    return services;
+}
+
+std::unordered_set<std::string> active_trips(std::istream& trips,
+                                             const std::unordered_set<std::string>& services) {
+    CsvReader csv(trips, "trips.txt");
+    const size_t trip_col = csv.column("trip_id");
+    const size_t service_col = csv.column("service_id");
+    std::unordered_set<std::string> active;
+    std::vector<std::string> row;
+    while (csv.next(row)) {
+        if (services.count(row[service_col])) active.insert(row[trip_col]);
+    }
+    return active;
+}
+
 int32_t Timetable::stop_index(const std::string& stop_id) const {
     const auto it = stop_index_.find(stop_id);
     if (it == stop_index_.end()) throw std::out_of_range("unknown stop_id: " + stop_id);
@@ -117,16 +226,39 @@ int32_t Timetable::stop_index(const std::string& stop_id) const {
 }
 
 Timetable Timetable::from_gtfs_dir(const std::string& dir) {
-    const std::string stops_path = dir + "/stops.txt";
-    const std::string stop_times_path = dir + "/stop_times.txt";
-    std::ifstream stops(stops_path);
-    if (!stops) throw std::runtime_error("cannot open " + stops_path);
-    std::ifstream stop_times(stop_times_path);
-    if (!stop_times) throw std::runtime_error("cannot open " + stop_times_path);
+    std::ifstream stops = open_gtfs_file(dir, "stops.txt");
+    std::ifstream stop_times = open_gtfs_file(dir, "stop_times.txt");
     return from_gtfs(stops, stop_times);
 }
 
+Timetable Timetable::from_gtfs_dir(const std::string& dir, int32_t service_date) {
+    std::ifstream calendar(dir + "/calendar.txt");
+    std::ifstream calendar_dates(dir + "/calendar_dates.txt");
+    if (!calendar && !calendar_dates) {
+        throw std::runtime_error(dir + ": needs calendar.txt or calendar_dates.txt");
+    }
+    const auto services = active_services(calendar ? &calendar : nullptr,
+                                          calendar_dates ? &calendar_dates : nullptr,
+                                          service_date);
+    std::ifstream trips_file = open_gtfs_file(dir, "trips.txt");
+    const auto trips = active_trips(trips_file, services);
+
+    std::ifstream stops = open_gtfs_file(dir, "stops.txt");
+    std::ifstream stop_times = open_gtfs_file(dir, "stop_times.txt");
+    return from_gtfs(stops, stop_times, trips);
+}
+
 Timetable Timetable::from_gtfs(std::istream& stops, std::istream& stop_times) {
+    return load(stops, stop_times, nullptr);
+}
+
+Timetable Timetable::from_gtfs(std::istream& stops, std::istream& stop_times,
+                               const std::unordered_set<std::string>& trips) {
+    return load(stops, stop_times, &trips);
+}
+
+Timetable Timetable::load(std::istream& stops, std::istream& stop_times,
+                          const std::unordered_set<std::string>* trips) {
     Timetable tt;
     std::vector<std::string> row;
 
@@ -151,6 +283,7 @@ Timetable Timetable::from_gtfs(std::istream& stops, std::istream& stop_times) {
     std::unordered_map<std::string, int32_t> trip_index;
     std::vector<StopTime> rows;
     while (times_csv.next(row)) {
+        if (trips && !trips->count(row[trip_col])) continue;
         const auto stop = tt.stop_index_.find(row[stop_col]);
         if (stop == tt.stop_index_.end()) {
             throw std::runtime_error(times_csv.where() + ": unknown stop_id " + row[stop_col]);
