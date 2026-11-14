@@ -8,7 +8,7 @@ endif()
 
 find_package(Python COMPONENTS Interpreter Development.Module REQUIRED)
 find_package(pybind11 CONFIG REQUIRED)
-add_library(router STATIC cpp/router.cpp)
+add_library(router STATIC cpp/router.cpp cpp/geo.cpp)
 target_include_directories(router PUBLIC cpp)
 set_target_properties(router PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
@@ -20,7 +20,7 @@ FetchContent_Declare(catch2
   GIT_REPOSITORY https://github.com/catchorg/Catch2.git
   GIT_TAG v3.5.2)
 FetchContent_MakeAvailable(catch2)
-add_executable(router_tests cpp/tests/test_router.cpp)
+add_executable(router_tests cpp/tests/test_router.cpp cpp/tests/test_geo.cpp)
 target_link_libraries(router_tests PRIVATE router Catch2::Catch2WithMain)
 target_compile_definitions(router_tests PRIVATE
   TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/data/fixtures")

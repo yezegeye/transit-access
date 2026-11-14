@@ -48,6 +48,22 @@ PYBIND11_MODULE(transit_router, m) {
         .def_property_readonly("stop_lons", &Timetable::stop_lons,
                                "stop_lon per stop, parallel to stop_ids (NaN if missing).")
         .def("stop_index", &stop_index, py::arg("stop_id"))
+        .def("generate_footpaths", &Timetable::generate_footpaths,
+             py::arg("max_distance_m") = 400.0, py::arg("walk_speed_mps") = 1.3,
+             "Replace the footpaths with a walk between every pair of stops at most\n"
+             "`max_distance_m` apart (straight line), taking distance / walk_speed_mps\n"
+             "seconds. Returns the number of footpaths (each direction counts once).")
+        .def_property_readonly("num_footpaths", &Timetable::num_footpaths)
+        .def(
+            "footpaths",
+            [](const Timetable& tt, const std::string& stop_id) {
+                py::dict walks;
+                for (const auto& f : tt.footpaths(stop_index(tt, stop_id))) {
+                    walks[py::str(tt.stop_ids()[f.to])] = f.duration;
+                }
+                return walks;
+            },
+            py::arg("stop_id"), "Walking time in seconds from `stop_id` to each neighbouring stop.")
         .def("__repr__", [](const Timetable& tt) {
             return "<Timetable stops=" + std::to_string(tt.num_stops()) +
                    " connections=" + std::to_string(tt.connections().size()) + ">";

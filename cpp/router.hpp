@@ -40,6 +40,12 @@ struct Connection {
     int32_t trip;
 };
 
+// A walk from one stop to another, `duration` seconds long.
+struct Footpath {
+    int32_t to;
+    int32_t duration;
+};
+
 class Timetable {
 public:
     // Reads stops.txt and stop_times.txt from a GTFS directory. Every trip is
@@ -66,6 +72,17 @@ public:
     // Sorted by departure time.
     const std::vector<Connection>& connections() const { return connections_; }
 
+    // Replaces the footpaths with a walk between every pair of stops at most
+    // `max_distance_m` apart (straight-line haversine distance), taking
+    // distance / `walk_speed_mps` seconds, rounded up. Stops without
+    // coordinates get none. Returns the number of footpaths (each direction
+    // counts once). Throws std::invalid_argument for a negative distance or a
+    // non-positive speed.
+    size_t generate_footpaths(double max_distance_m, double walk_speed_mps);
+    // Footpaths leaving `stop`, in increasing order of destination stop.
+    const std::vector<Footpath>& footpaths(int32_t stop) const { return footpaths_[stop]; }
+    size_t num_footpaths() const { return num_footpaths_; }
+
 private:
     static Timetable load(std::istream& stops, std::istream& stop_times,
                           const std::unordered_set<std::string>* trips);
@@ -75,6 +92,8 @@ private:
     std::vector<double> stop_lats_;
     std::vector<double> stop_lons_;
     std::vector<Connection> connections_;
+    std::vector<std::vector<Footpath>> footpaths_;  // indexed by stop
+    size_t num_footpaths_ = 0;
 };
 
 // Connection Scan Algorithm: earliest arrival time at every stop when leaving

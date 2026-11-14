@@ -37,6 +37,19 @@ def test_stop_coordinates(tt):
     assert tt.stop_lons == [0.0, 0.01, 0.02, 0.01, 0.02]
 
 
+def test_generate_footpaths():
+    tt = tr.Timetable.from_gtfs_dir(TINY)
+    assert tt.num_footpaths == 0
+    assert tt.generate_footpaths(1200, 1.0) == 6
+    assert tt.num_footpaths == 6
+    assert tt.footpaths("B") == {"A": 1112, "C": 1112, "D": 1112}
+    assert tt.footpaths("E") == {}
+    with pytest.raises(KeyError):
+        tt.footpaths("Z")
+    with pytest.raises(ValueError):
+        tt.generate_footpaths(400, 0)
+
+
 def test_earliest_arrival_with_transfer(tt):
     assert tr.earliest_arrival(tt, "A", t("08:00:00")) == {
         "A": t("08:00:00"),

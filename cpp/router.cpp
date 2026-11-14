@@ -1,4 +1,5 @@
 #include "router.hpp"
+#include "geo.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -249,6 +250,23 @@ int32_t Timetable::stop_index(const std::string& stop_id) const {
     return it->second;
 }
 
+size_t Timetable::generate_footpaths(double max_distance_m, double walk_speed_mps) {
+    if (!(max_distance_m >= 0)) throw std::invalid_argument("max_distance_m must be >= 0");
+    if (!(walk_speed_mps > 0)) throw std::invalid_argument("walk_speed_mps must be > 0");
+    footpaths_.assign(stop_ids_.size(), {});
+    num_footpaths_ = 0;
+    const PointGrid grid(stop_lats_, stop_lons_, std::max(max_distance_m, 1.0));
+    for (int32_t from = 0; from < num_stops(); ++from) {
+        for (const auto& [to, distance] : grid.within(stop_lats_[from], stop_lons_[from], max_distance_m)) {
+            if (to == from) continue;
+            const auto duration = static_cast<int32_t>(std::ceil(distance / walk_speed_mps));
+            footpaths_[from].push_back({to, duration});
+        }
+        num_footpaths_ += footpaths_[from].size();
+    }
+    return num_footpaths_;
+}
+
 Timetable Timetable::from_gtfs_dir(const std::string& dir) {
     std::ifstream stops = open_gtfs_file(dir, "stops.txt");
     std::ifstream stop_times = open_gtfs_file(dir, "stop_times.txt");
@@ -311,6 +329,7 @@ Timetable Timetable::load(std::istream& stops, std::istream& stop_times,
         tt.stop_lats_.push_back(lat);
         tt.stop_lons_.push_back(lon);
     }
+    tt.footpaths_.assign(tt.stop_ids_.size(), {});
 
     CsvReader times_csv(stop_times, "stop_times.txt");
     const size_t trip_col = times_csv.column("trip_id");

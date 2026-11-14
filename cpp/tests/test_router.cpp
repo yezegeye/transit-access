@@ -165,6 +165,43 @@ TEST_CASE("stop coordinates") {
     }
 }
 
+TEST_CASE("generate_footpaths") {
+    Timetable tt = tiny();
+    CHECK(tt.num_footpaths() == 0);
+    for (int32_t s = 0; s < tt.num_stops(); ++s) CHECK(tt.footpaths(s).empty());
+
+    // B's neighbours A, C and D are 0.01 degrees (about 1112 m) away; every
+    // other pair is at least about 1572 m apart, so E is out of reach.
+    const auto id = [&](const char* stop) { return tt.stop_index(stop); };
+    CHECK(tt.generate_footpaths(1000, 1.0) == 0);
+    REQUIRE(tt.generate_footpaths(1200, 1.0) == 6);  // A-B, B-C, B-D both ways
+    const auto& from_b = tt.footpaths(id("B"));
+    REQUIRE(from_b.size() == 3);
+    CHECK(from_b[0].to == id("A"));
+    CHECK(from_b[1].to == id("C"));
+    CHECK(from_b[2].to == id("D"));
+    CHECK(from_b[0].duration == 1112);  // 1111.95 m at 1 m/s, rounded up
+    CHECK(tt.footpaths(id("A")).size() == 1);
+    CHECK(tt.footpaths(id("E")).empty());
+
+    // Regenerating replaces the old footpaths; durations scale with speed.
+    tt.generate_footpaths(1200, 2.0);
+    CHECK(tt.num_footpaths() == 6);
+    CHECK(tt.footpaths(id("B"))[0].duration == 556);
+
+    CHECK_THROWS_AS(tt.generate_footpaths(-1, 1.0), std::invalid_argument);
+    CHECK_THROWS_AS(tt.generate_footpaths(400, 0.0), std::invalid_argument);
+}
+
+TEST_CASE("stops without coordinates get no footpaths") {
+    std::istringstream stops("stop_id,stop_lat,stop_lon\nA,41.9,-87.6\nB,,\nC,41.9,-87.6001\n");
+    std::istringstream stop_times("trip_id,arrival_time,departure_time,stop_id,stop_sequence\n");
+    Timetable tt = Timetable::from_gtfs(stops, stop_times);
+    CHECK(tt.generate_footpaths(400, 1.3) == 2);  // A <-> C only
+    CHECK(tt.footpaths(1).empty());
+    CHECK(tt.footpaths(0)[0].duration == 7);  // about 8.3 m at 1.3 m/s
+}
+
 TEST_CASE("parse_gtfs_date") {
     CHECK(parse_gtfs_date("20261014") == 20261014);
     CHECK(parse_gtfs_date(" 20240229 ") == 20240229);  // leap day
