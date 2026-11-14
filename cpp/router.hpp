@@ -96,9 +96,25 @@ private:
     size_t num_footpaths_ = 0;
 };
 
-// Connection Scan Algorithm: earliest arrival time at every stop when leaving
-// `source` at `departure_time`. Transfers are instantaneous and there are no
-// footpaths between stops. Unreachable stops get kUnreachable.
+// A way to start a journey: be at `stop` at `time`.
+struct Departure {
+    int32_t stop;
+    int32_t time;
+};
+
+// Connection Scan Algorithm: earliest arrival time at every stop when the
+// journey can start from any of `sources`. Transfers between vehicles at the
+// same stop are instantaneous. After each ride the traveller may take one
+// footpath from Timetable::footpaths() (walks are not chained); sources do not
+// get a walk, since a caller-supplied source is usually already the end of a
+// walk. Connections departing after `latest_departure` are ignored, which
+// bounds the scan. Unreachable stops get kUnreachable.
+std::vector<int32_t> earliest_arrival(const Timetable& tt, const std::vector<Departure>& sources,
+                                      int32_t latest_departure = kUnreachable);
+
+// Earliest arrival at every stop when leaving stop `source` at
+// `departure_time`. The traveller may first walk one footpath from `source`,
+// then ride, walking one footpath after each ride.
 std::vector<int32_t> earliest_arrival(const Timetable& tt, int32_t source,
                                       int32_t departure_time);
 

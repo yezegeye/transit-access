@@ -59,6 +59,14 @@ def test_earliest_arrival_with_transfer(tt):
     }
 
 
+def test_earliest_arrival_uses_footpaths():
+    tt = tr.Timetable.from_gtfs_dir(TINY)
+    tt.generate_footpaths(1200, 1.3)
+    reached = tr.earliest_arrival(tt, "A", t("08:00:00"))
+    assert reached["D"] == t("08:10:00") + 856  # ride T1 to B, then walk to D
+    assert "E" not in reached
+
+
 def test_earliest_arrival_after_missing_first_trip(tt):
     assert tr.earliest_arrival(tt, "A", t("08:01:00")) == {
         "A": t("08:01:00"),

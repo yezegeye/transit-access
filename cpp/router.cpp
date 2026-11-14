@@ -379,23 +379,51 @@ Timetable Timetable::load(std::istream& stops, std::istream& stop_times,
     return tt;
 }
 
+std::vector<int32_t> earliest_arrival(const Timetable& tt, const std::vector<Departure>& sources,
+                                      int32_t latest_departure) {
+    std::vector<int32_t> arrival(tt.num_stops(), kUnreachable);
+    // Earliest arrival at each stop on a vehicle. Walking on is allowed only
+    // from these, so a walk is never chained onto another walk.
+    std::vector<int32_t> by_vehicle(tt.num_stops(), kUnreachable);
+    int32_t start = kUnreachable;
+    for (const Departure& d : sources) {
+        if (d.stop < 0 || d.stop >= tt.num_stops()) {
+            throw std::out_of_range("source stop index out of range");
+        }
+        arrival[d.stop] = std::min(arrival[d.stop], d.time);
+        start = std::min(start, d.time);
+    }
+    if (sources.empty()) return arrival;
+
+    const auto& conns = tt.connections();
+    auto it = std::lower_bound(conns.begin(), conns.end(), start,
+                               [](const Connection& c, int32_t t) { return c.dep_time < t; });
+    for (; it != conns.end() && it->dep_time <= latest_departure; ++it) {
+        // Boarding needs us at the stop by departure. A traveller already on
+        // this trip passes the same test: they reached dep_stop at this trip's
+        // arrival there, which is no later than its departure.
+        if (arrival[it->dep_stop] > it->dep_time || it->arr_time >= by_vehicle[it->arr_stop]) {
+            continue;
+        }
+        by_vehicle[it->arr_stop] = it->arr_time;
+        arrival[it->arr_stop] = std::min(arrival[it->arr_stop], it->arr_time);
+        for (const Footpath& walk : tt.footpaths(it->arr_stop)) {
+            arrival[walk.to] = std::min(arrival[walk.to], it->arr_time + walk.duration);
+        }
+    }
+    return arrival;
+}
+
 std::vector<int32_t> earliest_arrival(const Timetable& tt, int32_t source,
                                       int32_t departure_time) {
     if (source < 0 || source >= tt.num_stops()) {
         throw std::out_of_range("source stop index out of range");
     }
-    std::vector<int32_t> arrival(tt.num_stops(), kUnreachable);
-    arrival[source] = departure_time;
-
-    const auto& conns = tt.connections();
-    auto it = std::lower_bound(conns.begin(), conns.end(), departure_time,
-                               [](const Connection& c, int32_t t) { return c.dep_time < t; });
-    for (; it != conns.end(); ++it) {
-        if (arrival[it->dep_stop] <= it->dep_time && it->arr_time < arrival[it->arr_stop]) {
-            arrival[it->arr_stop] = it->arr_time;
-        }
+    std::vector<Departure> sources{{source, departure_time}};
+    for (const Footpath& walk : tt.footpaths(source)) {
+        sources.push_back({walk.to, departure_time + walk.duration});
     }
-    return arrival;
+    return earliest_arrival(tt, sources);
 }
 
 }  // namespace transit

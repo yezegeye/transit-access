@@ -1,5 +1,8 @@
 #include <catch2/catch_test_macros.hpp>
+#include <algorithm>
 #include <cmath>
+#include <cstdio>
+#include <random>
 #include <sstream>
 #include <stdexcept>
 #include "router.hpp"
@@ -202,6 +205,97 @@ TEST_CASE("stops without coordinates get no footpaths") {
     CHECK(tt.footpaths(0)[0].duration == 7);  // about 8.3 m at 1.3 m/s
 }
 
+TEST_CASE("earliest_arrival with footpaths on the tiny feed") {
+    Timetable tt = tiny();
+    const auto at = [&](const std::vector<int32_t>& arr, const char* stop) {
+        return arr[tt.stop_index(stop)];
+    };
+    const int32_t walk_1_3 = 856;  // 1111.95 m at 1.3 m/s, rounded up
+
+    SECTION("walking after a ride beats waiting for the next vehicle") {
+        tt.generate_footpaths(1200, 1.3);
+        const auto arr = earliest_arrival(tt, tt.stop_index("A"), parse_gtfs_time("08:00:00"));
+        CHECK(at(arr, "B") == parse_gtfs_time("08:10:00"));
+        CHECK(at(arr, "C") == parse_gtfs_time("08:20:00"));
+        // T1 to B at 08:10, then walk to D, beating T2's 08:25 arrival.
+        CHECK(at(arr, "D") == parse_gtfs_time("08:10:00") + walk_1_3);
+        CHECK(at(arr, "E") == kUnreachable);
+    }
+
+    SECTION("walking from the source catches a trip that was already missed at it") {
+        tt.generate_footpaths(1200, 2.0);  // A -> B takes 556 s
+        const auto arr = earliest_arrival(tt, tt.stop_index("A"), parse_gtfs_time("08:01:00"));
+        // At B by 08:10:16: board T1 (dep 08:12) to C and T2 (dep 08:15) to D.
+        CHECK(at(arr, "B") == parse_gtfs_time("08:01:00") + 556);
+        CHECK(at(arr, "C") == parse_gtfs_time("08:20:00"));
+        CHECK(at(arr, "D") == parse_gtfs_time("08:25:00"));
+    }
+
+    SECTION("a walk too slow to catch the trip changes nothing") {
+        tt.generate_footpaths(1200, 1.3);
+        const auto arr = earliest_arrival(tt, tt.stop_index("A"), parse_gtfs_time("08:01:00"));
+        CHECK(at(arr, "B") == parse_gtfs_time("08:01:00") + walk_1_3);  // 08:15:16, T2 gone
+        CHECK(at(arr, "C") == kUnreachable);
+        CHECK(at(arr, "D") == parse_gtfs_time("08:40:00"));
+    }
+}
+
+// S, Q and R lie due north of each other about 111 m apart, so with a 150 m
+// radius S-Q and Q-R are footpaths but S-R is not. Trip T rides S -> Q.
+static Timetable line_feed() {
+    std::istringstream stops(
+        "stop_id,stop_lat,stop_lon\nS,41.9000,-87.6\nQ,41.9010,-87.6\nR,41.9020,-87.6\n");
+    std::istringstream stop_times(
+        "trip_id,arrival_time,departure_time,stop_id,stop_sequence\n"
+        "T,10:00:00,10:00:00,S,1\n"
+        "T,10:10:00,10:10:00,Q,2\n");
+    Timetable tt = Timetable::from_gtfs(stops, stop_times);
+    tt.generate_footpaths(150, 1.0);
+    return tt;
+}
+
+TEST_CASE("footpaths are not chained") {
+    const Timetable tt = line_feed();
+    const int32_t walk = tt.footpaths(0)[0].duration;  // S -> Q
+    REQUIRE(walk == 112);
+    // Leaving S after T has gone: Q is a walk away, R would need two walks.
+    const auto arr = earliest_arrival(tt, tt.stop_index("S"), parse_gtfs_time("10:05:00"));
+    CHECK(arr[tt.stop_index("Q")] == parse_gtfs_time("10:05:00") + walk);
+    CHECK(arr[tt.stop_index("R")] == kUnreachable);
+}
+
+TEST_CASE("a ride ending where a walk already reached still allows a walk on") {
+    const Timetable tt = line_feed();
+    // Walking reaches Q at 09:59:52, but only riding T to Q (10:10) gives a
+    // ride to walk on from, so R is reached at 10:10 + 112 s.
+    const auto arr = earliest_arrival(tt, tt.stop_index("S"), parse_gtfs_time("09:58:00"));
+    CHECK(arr[tt.stop_index("Q")] == parse_gtfs_time("09:58:00") + 112);
+    CHECK(arr[tt.stop_index("R")] == parse_gtfs_time("10:10:00") + 112);
+}
+
+TEST_CASE("earliest_arrival from several sources") {
+    const Timetable tt = tiny();
+    const auto id = [&](const char* stop) { return tt.stop_index(stop); };
+    using transit::Departure;
+
+    // At C by 08:30 (T4 to D 08:35) or at B by 08:15 (T2 to D 08:25).
+    auto arr = earliest_arrival(tt, {{id("C"), parse_gtfs_time("08:30:00")},
+                                     {id("B"), parse_gtfs_time("08:14:00")}});
+    CHECK(arr[id("B")] == parse_gtfs_time("08:14:00"));
+    CHECK(arr[id("D")] == parse_gtfs_time("08:25:00"));
+    // Duplicate sources keep the earliest time.
+    arr = earliest_arrival(tt, {{id("B"), parse_gtfs_time("08:20:00")},
+                                {id("B"), parse_gtfs_time("08:14:00")}});
+    CHECK(arr[id("B")] == parse_gtfs_time("08:14:00"));
+    // latest_departure drops T2 (08:15) but keeps nothing else useful.
+    arr = earliest_arrival(tt, {{id("B"), parse_gtfs_time("08:14:00")}},
+                           parse_gtfs_time("08:14:59"));
+    CHECK(arr[id("D")] == kUnreachable);
+    CHECK(earliest_arrival(tt, std::vector<Departure>{}) ==
+          std::vector<int32_t>(tt.num_stops(), kUnreachable));
+    CHECK_THROWS_AS(earliest_arrival(tt, {{99, 0}}), std::out_of_range);
+}
+
 TEST_CASE("parse_gtfs_date") {
     CHECK(parse_gtfs_date("20261014") == 20261014);
     CHECK(parse_gtfs_date(" 20240229 ") == 20240229);  // leap day
@@ -285,5 +379,66 @@ TEST_CASE("loading a service day keeps only the trips running that day") {
     SECTION("no service on Sunday or outside the calendar range") {
         CHECK(tiny_on(20261018).connections().empty());
         CHECK(tiny_on(20270104).connections().empty());
+    }
+}
+
+// Reference answer by repeated relaxation in arbitrary order until nothing
+// changes. It shares the one-walk-per-ride rule but not the scan's reliance on
+// processing connections in departure order.
+static std::vector<int32_t> fixpoint_arrival(const Timetable& tt, int32_t source, int32_t t0) {
+    std::vector<int32_t> arrival(tt.num_stops(), kUnreachable), ride(tt.num_stops(), kUnreachable);
+    arrival[source] = t0;
+    for (const auto& w : tt.footpaths(source)) arrival[w.to] = std::min(arrival[w.to], t0 + w.duration);
+    for (bool changed = true; changed;) {
+        changed = false;
+        for (auto c = tt.connections().rbegin(); c != tt.connections().rend(); ++c) {
+            if (c->dep_time < t0 || arrival[c->dep_stop] > c->dep_time || c->arr_time >= ride[c->arr_stop]) continue;
+            ride[c->arr_stop] = c->arr_time;
+            arrival[c->arr_stop] = std::min(arrival[c->arr_stop], c->arr_time);
+            for (const auto& w : tt.footpaths(c->arr_stop)) {
+                arrival[w.to] = std::min(arrival[w.to], c->arr_time + w.duration);
+            }
+            changed = true;
+        }
+    }
+    return arrival;
+}
+
+TEST_CASE("scan matches a fixpoint reference on random feeds") {
+    std::mt19937 rng(11);
+    for (int feed = 0; feed < 40; ++feed) {
+        const int n_stops = 30;
+        std::uniform_real_distribution<double> coord(0.0, 0.01);  // about 1.1 km square
+        std::string stops = "stop_id,stop_lat,stop_lon\n";
+        for (int s = 0; s < n_stops; ++s) {
+            stops += "S" + std::to_string(s) + "," + std::to_string(41.9 + coord(rng)) + "," +
+                     std::to_string(-87.6 + coord(rng)) + "\n";
+        }
+        std::string times = "trip_id,arrival_time,departure_time,stop_id,stop_sequence\n";
+        std::uniform_int_distribution<int> stop(0, n_stops - 1), start(8 * 3600, 9 * 3600),
+            hop(30, 600), dwell(0, 60), len(2, 6);
+        const auto hms = [](int t) {
+            char buf[16];
+            std::snprintf(buf, sizeof buf, "%02d:%02d:%02d", t / 3600, t / 60 % 60, t % 60);
+            return std::string(buf);
+        };
+        for (int trip = 0; trip < 60; ++trip) {
+            int t = start(rng);
+            const int n = len(rng);
+            for (int k = 0; k < n; ++k) {
+                const int arr = t;
+                const int dep = arr + (k + 1 < n ? dwell(rng) : 0);
+                times += "T" + std::to_string(trip) + "," + hms(arr) + "," + hms(dep) + ",S" +
+                         std::to_string(stop(rng)) + "," + std::to_string(k + 1) + "\n";
+                t = dep + hop(rng);
+            }
+        }
+        std::istringstream stops_in(stops), times_in(times);
+        Timetable tt = Timetable::from_gtfs(stops_in, times_in);
+        tt.generate_footpaths(300, 1.3);
+        for (int q = 0; q < 10; ++q) {
+            const int32_t source = stop(rng), t0 = start(rng);
+            CHECK(earliest_arrival(tt, source, t0) == fixpoint_arrival(tt, source, t0));
+        }
     }
 }
