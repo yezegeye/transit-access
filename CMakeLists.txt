@@ -10,6 +10,8 @@ find_package(Python COMPONENTS Interpreter Development.Module REQUIRED)
 find_package(pybind11 CONFIG REQUIRED)
 add_library(router STATIC cpp/router.cpp cpp/geo.cpp)
 target_include_directories(router PUBLIC cpp)
+find_package(Threads REQUIRED)
+target_link_libraries(router PUBLIC Threads::Threads)
 set_target_properties(router PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
 pybind11_add_module(transit_router cpp/bindings.cpp)

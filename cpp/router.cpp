@@ -2,10 +2,12 @@
 #include "geo.hpp"
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <cstdio>
 #include <fstream>
 #include <stdexcept>
+#include <thread>
 #include <tuple>
 
 namespace transit {
@@ -424,6 +426,95 @@ std::vector<int32_t> earliest_arrival(const Timetable& tt, int32_t source,
         sources.push_back({walk.to, departure_time + walk.duration});
     }
     return earliest_arrival(tt, sources);
+}
+
+namespace {
+
+// For each point, the stops within `max_m` and the walk there in seconds.
+std::vector<std::vector<Footpath>> stops_near(const Timetable& tt, const PointGrid& stop_grid,
+                                              const std::vector<LatLon>& points, double max_m,
+                                              double speed) {
+    std::vector<std::vector<Footpath>> near(points.size());
+    for (size_t i = 0; i < points.size(); ++i) {
+        for (const auto& [stop, d] : stop_grid.within(points[i].lat, points[i].lon, max_m)) {
+            near[i].push_back({stop, static_cast<int32_t>(std::ceil(d / speed))});
+        }
+    }
+    return near;
+}
+
+}  // namespace
+
+std::vector<int32_t> travel_time_matrix(const Timetable& tt, const std::vector<LatLon>& origins,
+                                        const std::vector<LatLon>& destinations,
+                                        const std::vector<int32_t>& departure_times,
+                                        const MatrixOptions& options) {
+    if (!(options.max_access_m >= 0)) throw std::invalid_argument("max_access_m must be >= 0");
+    if (!(options.walk_speed_mps > 0)) throw std::invalid_argument("walk_speed_mps must be > 0");
+    if (options.max_travel_time < 0) throw std::invalid_argument("max_travel_time must be >= 0");
+
+    const size_t n_orig = origins.size(), n_dep = departure_times.size(),
+                 n_dest = destinations.size();
+    std::vector<int32_t> result(n_orig * n_dep * n_dest, kUnreachable);
+    if (result.empty()) return result;
+
+    const double cell = std::max(options.max_access_m, 1.0);
+    const PointGrid stop_grid(tt.stop_lats(), tt.stop_lons(), cell);
+    const auto access = stops_near(tt, stop_grid, origins, options.max_access_m, options.walk_speed_mps);
+    const auto egress = stops_near(tt, stop_grid, destinations, options.max_access_m, options.walk_speed_mps);
+
+    std::vector<double> dest_lats, dest_lons;
+    for (const LatLon& p : destinations) {
+        dest_lats.push_back(p.lat);
+        dest_lons.push_back(p.lon);
+    }
+    const PointGrid dest_grid(dest_lats, dest_lons, cell);
+
+    const auto route_origin = [&](size_t o) {
+        std::vector<Footpath> direct;  // destination index, walk seconds
+        for (const auto& [d, m] : dest_grid.within(origins[o].lat, origins[o].lon, options.max_access_m)) {
+            direct.push_back({d, static_cast<int32_t>(std::ceil(m / options.walk_speed_mps))});
+        }
+        std::vector<Departure> sources;
+        for (size_t k = 0; k < n_dep; ++k) {
+            const int32_t dep = departure_times[k];
+            // int64 so that an unbounded travel time cannot overflow.
+            const int64_t bound = static_cast<int64_t>(dep) + options.max_travel_time;
+            const auto latest = static_cast<int32_t>(std::min<int64_t>(bound, kUnreachable));
+            int32_t* row = &result[(o * n_dep + k) * n_dest];
+
+            for (const Footpath& walk : direct) row[walk.to] = walk.duration;
+            if (access[o].empty()) continue;
+            sources.clear();
+            for (const Footpath& walk : access[o]) sources.push_back({walk.to, dep + walk.duration});
+            const auto arrival = earliest_arrival(tt, sources, latest);
+            for (size_t d = 0; d < n_dest; ++d) {
+                for (const Footpath& walk : egress[d]) {
+                    if (arrival[walk.to] == kUnreachable) continue;
+                    row[d] = std::min(row[d], arrival[walk.to] + walk.duration - dep);
+                }
+            }
+        }
+        if (options.max_travel_time != kUnreachable) {
+            int32_t* block = &result[o * n_dep * n_dest];
+            for (size_t i = 0; i < n_dep * n_dest; ++i) {
+                if (block[i] > options.max_travel_time) block[i] = kUnreachable;
+            }
+        }
+    };
+
+    size_t n_threads = options.threads > 0 ? static_cast<size_t>(options.threads)
+                                           : std::max(1u, std::thread::hardware_concurrency());
+    n_threads = std::min(n_threads, n_orig);
+    std::atomic<size_t> next{0};
+    const auto worker = [&] {
+        for (size_t o; (o = next++) < n_orig;) route_origin(o);
+    };
+    std::vector<std::thread> pool;
+    for (size_t i = 1; i < n_threads; ++i) pool.emplace_back(worker);
+    worker();
+    for (auto& t : pool) t.join();
+    return result;
 }
 
 }  // namespace transit

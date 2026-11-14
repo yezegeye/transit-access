@@ -118,4 +118,37 @@ std::vector<int32_t> earliest_arrival(const Timetable& tt, const std::vector<Dep
 std::vector<int32_t> earliest_arrival(const Timetable& tt, int32_t source,
                                       int32_t departure_time);
 
+// A WGS84 point in degrees, e.g. a census tract centroid.
+struct LatLon {
+    double lat;
+    double lon;
+};
+
+struct MatrixOptions {
+    // Longest walk from an origin to its first stop and from the last stop to
+    // a destination, straight-line metres. Also the longest walk-only trip.
+    double max_access_m = 800.0;
+    double walk_speed_mps = 1.3;
+    // Journeys taking longer than this many seconds count as unreachable;
+    // a bound also stops each scan early.
+    int32_t max_travel_time = kUnreachable;
+    // Worker threads; 0 uses std::thread::hardware_concurrency().
+    int threads = 0;
+};
+
+// Door-to-door travel time in seconds from every origin to every destination
+// for each departure time, as a row-major array indexed
+// [origin][departure][destination]; kUnreachable where there is no journey.
+// A journey walks from the origin to a stop within max_access_m, rides with
+// the timetable's footpaths as transfers, then walks from a stop to the
+// destination within max_access_m; an origin within max_access_m of a
+// destination may also just walk there. Travel time counts from the
+// departure time, so it includes waiting for the first vehicle. Points with
+// NaN coordinates are unreachable. Throws std::invalid_argument for a
+// negative access distance, a non-positive speed or a negative travel bound.
+std::vector<int32_t> travel_time_matrix(const Timetable& tt, const std::vector<LatLon>& origins,
+                                        const std::vector<LatLon>& destinations,
+                                        const std::vector<int32_t>& departure_times,
+                                        const MatrixOptions& options = {});
+
 }  // namespace transit

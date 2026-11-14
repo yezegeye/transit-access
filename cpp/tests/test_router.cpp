@@ -5,6 +5,7 @@
 #include <random>
 #include <sstream>
 #include <stdexcept>
+#include "geo.hpp"
 #include "router.hpp"
 
 using transit::active_services;
@@ -441,4 +442,94 @@ TEST_CASE("scan matches a fixpoint reference on random feeds") {
             CHECK(earliest_arrival(tt, source, t0) == fixpoint_arrival(tt, source, t0));
         }
     }
+}
+
+TEST_CASE("travel_time_matrix on the tiny feed") {
+    using transit::LatLon;
+    using transit::MatrixOptions;
+    using transit::travel_time_matrix;
+    Timetable tt = tiny();
+    const LatLon a{0.0, 0.0}, c{0.0, 0.02}, d{0.01, 0.01}, e{0.02, 0.02};
+    const int32_t t0800 = parse_gtfs_time("08:00:00"), t0801 = parse_gtfs_time("08:01:00");
+    MatrixOptions opt;
+    opt.max_access_m = 100;  // only the stop under each point
+
+    SECTION("layout is [origin][departure][destination]") {
+        const auto m = travel_time_matrix(tt, {a, c}, {d, e}, {t0800, t0801}, opt);
+        REQUIRE(m.size() == 2 * 2 * 2);
+        CHECK(m[0] == 25 * 60);            // A 08:00 -> D 08:25 (T1, T2)
+        CHECK(m[1] == kUnreachable);       // nothing reaches E
+        CHECK(m[2] == 39 * 60);            // A 08:01 -> D 08:40 (T3)
+        CHECK(m[3] == kUnreachable);
+        CHECK(m[4] == 35 * 60);            // C 08:00 -> D 08:35 (waits for T4)
+        CHECK(m[5] == kUnreachable);
+    }
+
+    SECTION("access and egress walks are added") {
+        // 0.00045 degrees of latitude north of A is about 50 m.
+        const LatLon near_a{0.00045, 0.0}, near_d{0.01045, 0.01};
+        const int32_t walk = static_cast<int32_t>(std::ceil(transit::haversine_m(0.00045, 0, 0, 0) / 1.3));
+        const auto m = travel_time_matrix(tt, {near_a}, {near_d}, {t0800 - walk}, opt);
+        CHECK(m[0] == 25 * 60 + 2 * walk);
+        // Leaving one second later misses T1 at A.
+        CHECK(travel_time_matrix(tt, {near_a}, {near_d}, {t0800 - walk + 1}, opt)[0] ==
+              parse_gtfs_time("08:40:00") + walk - (t0800 - walk + 1));
+    }
+
+    SECTION("walking directly and staying put") {
+        CHECK(travel_time_matrix(tt, {a}, {a}, {t0800}, opt)[0] == 0);
+        opt.max_access_m = 1200;
+        tt.generate_footpaths(1200, 1.3);
+        // A and B are 1112 m apart. Riding T1 takes 600 s; once T1 has left,
+        // walking (856 s) is the fastest way.
+        const LatLon b{0.0, 0.01};
+        CHECK(travel_time_matrix(tt, {a}, {b}, {t0800}, opt)[0] == 600);
+        CHECK(travel_time_matrix(tt, {a}, {b}, {t0801}, opt)[0] == 856);
+    }
+
+    SECTION("max_travel_time") {
+        opt.max_travel_time = 30 * 60;
+        const auto m = travel_time_matrix(tt, {a}, {d}, {t0800, t0801}, opt);
+        CHECK(m[0] == 25 * 60);
+        CHECK(m[1] == kUnreachable);  // 39 minutes
+    }
+
+    SECTION("points without coordinates and empty inputs") {
+        const auto m = travel_time_matrix(tt, {{NAN, NAN}}, {d}, {t0800}, opt);
+        CHECK(m == std::vector<int32_t>{kUnreachable});
+        CHECK(travel_time_matrix(tt, {}, {d}, {t0800}, opt).empty());
+        CHECK(travel_time_matrix(tt, {a}, {d}, {}, opt).empty());
+    }
+
+    SECTION("invalid options") {
+        MatrixOptions bad = opt;
+        bad.walk_speed_mps = 0;
+        CHECK_THROWS_AS(travel_time_matrix(tt, {a}, {d}, {t0800}, bad), std::invalid_argument);
+        bad = opt;
+        bad.max_access_m = -1;
+        CHECK_THROWS_AS(travel_time_matrix(tt, {a}, {d}, {t0800}, bad), std::invalid_argument);
+        bad = opt;
+        bad.max_travel_time = -1;
+        CHECK_THROWS_AS(travel_time_matrix(tt, {a}, {d}, {t0800}, bad), std::invalid_argument);
+    }
+}
+
+TEST_CASE("travel_time_matrix agrees with stop routing and across thread counts") {
+    using transit::LatLon;
+    using transit::MatrixOptions;
+    // The line feed's stops sit about 111 m apart; points on top of them with
+    // a 1 m access radius make each point equivalent to its stop.
+    const Timetable tt = line_feed();
+    const std::vector<LatLon> pts{{41.9000, -87.6}, {41.9010, -87.6}, {41.9020, -87.6}};
+    MatrixOptions opt;
+    opt.max_access_m = 1;
+    const std::vector<int32_t> deps{parse_gtfs_time("09:58:00"), parse_gtfs_time("10:05:00")};
+    opt.threads = 1;
+    const auto one = travel_time_matrix(tt, pts, pts, deps, opt);
+    opt.threads = 3;
+    CHECK(travel_time_matrix(tt, pts, pts, deps, opt) == one);
+    // Stop routing walks from the source; points with a 1 m radius do not,
+    // so compare a destination reached by riding: S 09:58 -> R via T + walk.
+    CHECK(one[(0 * 2 + 0) * 3 + 2] == parse_gtfs_time("10:10:00") + 112 - deps[0]);
+    CHECK(one[(0 * 2 + 0) * 3 + 0] == 0);
 }
