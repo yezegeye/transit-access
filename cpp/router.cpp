@@ -1,6 +1,7 @@
 #include "router.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <fstream>
 #include <stdexcept>
@@ -55,6 +56,10 @@ public:
         }
         if (header.rfind("\xEF\xBB\xBF", 0) == 0) header.erase(0, 3);  // UTF-8 BOM
         header_ = split_csv(header);
+    }
+
+    bool has_column(const std::string& col) const {
+        return std::find(header_.begin(), header_.end(), col) != header_.end();
     }
 
     size_t column(const std::string& col) const {
@@ -113,6 +118,25 @@ int weekday(int32_t date) {
     const int from_sunday =
         (year + year / 4 - year / 100 + year / 400 + kOffsets[month - 1] + day) % 7;
     return (from_sunday + 6) % 7;
+}
+
+// Optional column: returns npos when the header lacks it.
+constexpr size_t kNoColumn = static_cast<size_t>(-1);
+
+// Parses a coordinate in [-limit, limit]; an empty field gives NaN.
+double parse_coordinate(const std::string& text, double limit, const char* what) {
+    if (text.empty()) return std::nan("");
+    size_t used = 0;
+    double value = 0.0;
+    try {
+        value = std::stod(text, &used);
+    } catch (const std::logic_error&) {
+        used = 0;
+    }
+    if (used != text.size() || !(std::fabs(value) <= limit)) {
+        throw std::invalid_argument(std::string("invalid ") + what + ": '" + text + "'");
+    }
+    return value;
 }
 
 std::ifstream open_gtfs_file(const std::string& dir, const std::string& name) {
@@ -264,13 +288,28 @@ Timetable Timetable::load(std::istream& stops, std::istream& stop_times,
 
     CsvReader stops_csv(stops, "stops.txt");
     const size_t stop_id_col = stops_csv.column("stop_id");
+    const size_t lat_col =
+        stops_csv.has_column("stop_lat") ? stops_csv.column("stop_lat") : kNoColumn;
+    const size_t lon_col =
+        stops_csv.has_column("stop_lon") ? stops_csv.column("stop_lon") : kNoColumn;
     while (stops_csv.next(row)) {
         const std::string& id = row[stop_id_col];
         if (id.empty()) throw std::runtime_error(stops_csv.where() + ": empty stop_id");
+        double lat = std::nan(""), lon = std::nan("");
+        try {
+            if (lat_col != kNoColumn) lat = parse_coordinate(row[lat_col], 90.0, "stop_lat");
+            if (lon_col != kNoColumn) lon = parse_coordinate(row[lon_col], 180.0, "stop_lon");
+        } catch (const std::invalid_argument& e) {
+            throw std::runtime_error(stops_csv.where() + ": " + e.what());
+        }
+        // A stop with only one of the two coordinates is treated as having neither.
+        if (std::isnan(lat) || std::isnan(lon)) lat = lon = std::nan("");
         if (!tt.stop_index_.emplace(id, tt.num_stops()).second) {
             throw std::runtime_error(stops_csv.where() + ": duplicate stop_id " + id);
         }
         tt.stop_ids_.push_back(id);
+        tt.stop_lats_.push_back(lat);
+        tt.stop_lons_.push_back(lon);
     }
 
     CsvReader times_csv(stop_times, "stop_times.txt");

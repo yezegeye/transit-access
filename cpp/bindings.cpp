@@ -43,6 +43,10 @@ PYBIND11_MODULE(transit_router, m) {
         .def_property_readonly("num_connections",
                                [](const Timetable& tt) { return tt.connections().size(); })
         .def_property_readonly("stop_ids", &Timetable::stop_ids)
+        .def_property_readonly("stop_lats", &Timetable::stop_lats,
+                               "stop_lat per stop, parallel to stop_ids (NaN if missing).")
+        .def_property_readonly("stop_lons", &Timetable::stop_lons,
+                               "stop_lon per stop, parallel to stop_ids (NaN if missing).")
         .def("stop_index", &stop_index, py::arg("stop_id"))
         .def("__repr__", [](const Timetable& tt) {
             return "<Timetable stops=" + std::to_string(tt.num_stops()) +

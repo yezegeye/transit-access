@@ -32,6 +32,11 @@ def test_timetable_metadata(tt):
         tt.stop_index("Z")
 
 
+def test_stop_coordinates(tt):
+    assert tt.stop_lats == [0.0, 0.0, 0.0, 0.01, 0.02]
+    assert tt.stop_lons == [0.0, 0.01, 0.02, 0.01, 0.02]
+
+
 def test_earliest_arrival_with_transfer(tt):
     assert tr.earliest_arrival(tt, "A", t("08:00:00")) == {
         "A": t("08:00:00"),

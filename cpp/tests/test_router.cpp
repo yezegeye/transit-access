@@ -1,4 +1,5 @@
 #include <catch2/catch_test_macros.hpp>
+#include <cmath>
 #include <sstream>
 #include <stdexcept>
 #include "router.hpp"
@@ -130,6 +131,38 @@ TEST_CASE("GTFS parsing rejects bad input") {
     CHECK_THROWS_AS(load("stop_id\nA\n", "trip_id,stop_id\n"), std::runtime_error);   // columns
     CHECK_THROWS_AS(Timetable::from_gtfs_dir("/nonexistent"), std::runtime_error);
     CHECK_THROWS_AS(Timetable::from_gtfs_dir("/nonexistent", 20261014), std::runtime_error);
+}
+
+TEST_CASE("stop coordinates") {
+    const Timetable tt = tiny();
+    REQUIRE(tt.stop_lats().size() == 5);
+    REQUIRE(tt.stop_lons().size() == 5);
+    CHECK(tt.stop_lats()[tt.stop_index("D")] == 0.01);
+    CHECK(tt.stop_lons()[tt.stop_index("C")] == 0.02);
+
+    const auto load = [](const std::string& stops_txt) {
+        std::istringstream stops(stops_txt), stop_times("trip_id,arrival_time,departure_time,stop_id,stop_sequence\n");
+        return Timetable::from_gtfs(stops, stop_times);
+    };
+    SECTION("columns are optional") {
+        const Timetable no_coords = load("stop_id\nA\n");
+        CHECK(std::isnan(no_coords.stop_lats()[0]));
+        CHECK(std::isnan(no_coords.stop_lons()[0]));
+    }
+    SECTION("empty or half-missing coordinates become NaN") {
+        const Timetable partial = load("stop_id,stop_lat,stop_lon\nA,,\nB,41.9,\nC,41.9,-87.6\n");
+        CHECK(std::isnan(partial.stop_lats()[0]));
+        CHECK(std::isnan(partial.stop_lats()[1]));
+        CHECK(std::isnan(partial.stop_lons()[1]));
+        CHECK(partial.stop_lats()[2] == 41.9);
+        CHECK(partial.stop_lons()[2] == -87.6);
+    }
+    SECTION("malformed or out-of-range coordinates are rejected") {
+        CHECK_THROWS_AS(load("stop_id,stop_lat,stop_lon\nA,north,-87.6\n"), std::runtime_error);
+        CHECK_THROWS_AS(load("stop_id,stop_lat,stop_lon\nA,41.9x,-87.6\n"), std::runtime_error);
+        CHECK_THROWS_AS(load("stop_id,stop_lat,stop_lon\nA,91,-87.6\n"), std::runtime_error);
+        CHECK_THROWS_AS(load("stop_id,stop_lat,stop_lon\nA,41.9,-181\n"), std::runtime_error);
+    }
 }
 
 TEST_CASE("parse_gtfs_date") {

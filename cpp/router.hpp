@@ -1,4 +1,5 @@
 #pragma once
+#include <cmath>
 #include <cstdint>
 #include <istream>
 #include <limits>
@@ -54,6 +55,11 @@ public:
 
     int32_t num_stops() const { return static_cast<int32_t>(stop_ids_.size()); }
     const std::vector<std::string>& stop_ids() const { return stop_ids_; }
+    // WGS84 coordinates from stops.txt, parallel to stop_ids(). NaN when the
+    // stop_lat/stop_lon columns are absent or a stop leaves them empty (GTFS
+    // allows that for generic nodes and boarding areas).
+    const std::vector<double>& stop_lats() const { return stop_lats_; }
+    const std::vector<double>& stop_lons() const { return stop_lons_; }
     // Throws std::out_of_range for an unknown stop_id.
     int32_t stop_index(const std::string& stop_id) const;
 
@@ -66,6 +72,8 @@ private:
 
     std::vector<std::string> stop_ids_;
     std::unordered_map<std::string, int32_t> stop_index_;
+    std::vector<double> stop_lats_;
+    std::vector<double> stop_lons_;
     std::vector<Connection> connections_;
 };
 
