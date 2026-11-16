@@ -1,6 +1,7 @@
 import datetime
 from pathlib import Path
 
+import numpy as np
 import pytest
 import transit_router as tr
 
@@ -32,6 +33,24 @@ def test_timetable_metadata(tt):
         tt.stop_index("Z")
 
 
+def test_stop_coordinates(tt):
+    assert tt.stop_lats == [0.0, 0.0, 0.0, 0.01, 0.02]
+    assert tt.stop_lons == [0.0, 0.01, 0.02, 0.01, 0.02]
+
+
+def test_generate_footpaths():
+    tt = tr.Timetable.from_gtfs_dir(TINY)
+    assert tt.num_footpaths == 0
+    assert tt.generate_footpaths(1200, 1.0) == 6
+    assert tt.num_footpaths == 6
+    assert tt.footpaths("B") == {"A": 1112, "C": 1112, "D": 1112}
+    assert tt.footpaths("E") == {}
+    with pytest.raises(KeyError):
+        tt.footpaths("Z")
+    with pytest.raises(ValueError):
+        tt.generate_footpaths(400, 0)
+
+
 def test_earliest_arrival_with_transfer(tt):
     assert tr.earliest_arrival(tt, "A", t("08:00:00")) == {
         "A": t("08:00:00"),
@@ -39,6 +58,14 @@ def test_earliest_arrival_with_transfer(tt):
         "C": t("08:20:00"),
         "D": t("08:25:00"),
     }
+
+
+def test_earliest_arrival_uses_footpaths():
+    tt = tr.Timetable.from_gtfs_dir(TINY)
+    tt.generate_footpaths(1200, 1.3)
+    reached = tr.earliest_arrival(tt, "A", t("08:00:00"))
+    assert reached["D"] == t("08:10:00") + 856  # ride T1 to B, then walk to D
+    assert "E" not in reached
 
 
 def test_earliest_arrival_after_missing_first_trip(tt):
@@ -75,3 +102,30 @@ def test_service_day_filters_trips():
 def test_invalid_service_day():
     with pytest.raises(ValueError):
         tr.Timetable.from_gtfs_dir(TINY, "2026-10-14")
+
+
+def test_travel_time_matrix(tt):
+    a, c, d, e = (0.0, 0.0), (0.0, 0.02), (0.01, 0.01), (0.02, 0.02)
+    m = tr.travel_time_matrix(
+        tt, [a, c], np.array([d, e]), [t("08:00:00"), t("08:01:00")], max_access_m=100
+    )
+    assert m.shape == (2, 2, 2) and m.dtype == np.float32
+    assert m[0, 0, 0] == 25 * 60  # A -> D leaving 08:00
+    assert m[0, 1, 0] == 39 * 60  # leaving 08:01 misses T1
+    assert m[1, 0, 0] == 35 * 60  # C -> D waits for T4
+    assert np.isinf(m[:, :, 1]).all()  # nothing reaches E
+    # A median over departure times is the usual accessibility summary.
+    assert np.median(m[0, :, 0]) == 32 * 60
+
+    capped = tr.travel_time_matrix(
+        tt, [a], [d], [t("08:00:00"), t("08:01:00")], max_access_m=100, max_travel_time=1800
+    )
+    assert capped[0, 0, 0] == 1500 and np.isinf(capped[0, 1, 0])
+
+
+def test_travel_time_matrix_errors(tt):
+    with pytest.raises(ValueError):
+        tr.travel_time_matrix(tt, [[0.0, 0.0, 0.0]], [(0.0, 0.0)], [0])
+    with pytest.raises(ValueError):
+        tr.travel_time_matrix(tt, [(0.0, 0.0)], [(0.0, 0.0)], [0], walk_speed_mps=0)
+    assert tr.travel_time_matrix(tt, np.empty((0, 2)), [(0.0, 0.0)], [0]).shape == (0, 1, 1)

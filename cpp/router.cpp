@@ -1,9 +1,13 @@
 #include "router.hpp"
+#include "geo.hpp"
 
 #include <algorithm>
+#include <atomic>
+#include <cmath>
 #include <cstdio>
 #include <fstream>
 #include <stdexcept>
+#include <thread>
 #include <tuple>
 
 namespace transit {
@@ -55,6 +59,10 @@ public:
         }
         if (header.rfind("\xEF\xBB\xBF", 0) == 0) header.erase(0, 3);  // UTF-8 BOM
         header_ = split_csv(header);
+    }
+
+    bool has_column(const std::string& col) const {
+        return std::find(header_.begin(), header_.end(), col) != header_.end();
     }
 
     size_t column(const std::string& col) const {
@@ -113,6 +121,25 @@ int weekday(int32_t date) {
     const int from_sunday =
         (year + year / 4 - year / 100 + year / 400 + kOffsets[month - 1] + day) % 7;
     return (from_sunday + 6) % 7;
+}
+
+// Optional column: returns npos when the header lacks it.
+constexpr size_t kNoColumn = static_cast<size_t>(-1);
+
+// Parses a coordinate in [-limit, limit]; an empty field gives NaN.
+double parse_coordinate(const std::string& text, double limit, const char* what) {
+    if (text.empty()) return std::nan("");
+    size_t used = 0;
+    double value = 0.0;
+    try {
+        value = std::stod(text, &used);
+    } catch (const std::logic_error&) {
+        used = 0;
+    }
+    if (used != text.size() || !(std::fabs(value) <= limit)) {
+        throw std::invalid_argument(std::string("invalid ") + what + ": '" + text + "'");
+    }
+    return value;
 }
 
 std::ifstream open_gtfs_file(const std::string& dir, const std::string& name) {
@@ -225,6 +252,23 @@ int32_t Timetable::stop_index(const std::string& stop_id) const {
     return it->second;
 }
 
+size_t Timetable::generate_footpaths(double max_distance_m, double walk_speed_mps) {
+    if (!(max_distance_m >= 0)) throw std::invalid_argument("max_distance_m must be >= 0");
+    if (!(walk_speed_mps > 0)) throw std::invalid_argument("walk_speed_mps must be > 0");
+    footpaths_.assign(stop_ids_.size(), {});
+    num_footpaths_ = 0;
+    const PointGrid grid(stop_lats_, stop_lons_, std::max(max_distance_m, 1.0));
+    for (int32_t from = 0; from < num_stops(); ++from) {
+        for (const auto& [to, distance] : grid.within(stop_lats_[from], stop_lons_[from], max_distance_m)) {
+            if (to == from) continue;
+            const auto duration = static_cast<int32_t>(std::ceil(distance / walk_speed_mps));
+            footpaths_[from].push_back({to, duration});
+        }
+        num_footpaths_ += footpaths_[from].size();
+    }
+    return num_footpaths_;
+}
+
 Timetable Timetable::from_gtfs_dir(const std::string& dir) {
     std::ifstream stops = open_gtfs_file(dir, "stops.txt");
     std::ifstream stop_times = open_gtfs_file(dir, "stop_times.txt");
@@ -264,14 +308,30 @@ Timetable Timetable::load(std::istream& stops, std::istream& stop_times,
 
     CsvReader stops_csv(stops, "stops.txt");
     const size_t stop_id_col = stops_csv.column("stop_id");
+    const size_t lat_col =
+        stops_csv.has_column("stop_lat") ? stops_csv.column("stop_lat") : kNoColumn;
+    const size_t lon_col =
+        stops_csv.has_column("stop_lon") ? stops_csv.column("stop_lon") : kNoColumn;
     while (stops_csv.next(row)) {
         const std::string& id = row[stop_id_col];
         if (id.empty()) throw std::runtime_error(stops_csv.where() + ": empty stop_id");
+        double lat = std::nan(""), lon = std::nan("");
+        try {
+            if (lat_col != kNoColumn) lat = parse_coordinate(row[lat_col], 90.0, "stop_lat");
+            if (lon_col != kNoColumn) lon = parse_coordinate(row[lon_col], 180.0, "stop_lon");
+        } catch (const std::invalid_argument& e) {
+            throw std::runtime_error(stops_csv.where() + ": " + e.what());
+        }
+        // A stop with only one of the two coordinates is treated as having neither.
+        if (std::isnan(lat) || std::isnan(lon)) lat = lon = std::nan("");
         if (!tt.stop_index_.emplace(id, tt.num_stops()).second) {
             throw std::runtime_error(stops_csv.where() + ": duplicate stop_id " + id);
         }
         tt.stop_ids_.push_back(id);
+        tt.stop_lats_.push_back(lat);
+        tt.stop_lons_.push_back(lon);
     }
+    tt.footpaths_.assign(tt.stop_ids_.size(), {});
 
     CsvReader times_csv(stop_times, "stop_times.txt");
     const size_t trip_col = times_csv.column("trip_id");
@@ -321,23 +381,140 @@ Timetable Timetable::load(std::istream& stops, std::istream& stop_times,
     return tt;
 }
 
+std::vector<int32_t> earliest_arrival(const Timetable& tt, const std::vector<Departure>& sources,
+                                      int32_t latest_departure) {
+    std::vector<int32_t> arrival(tt.num_stops(), kUnreachable);
+    // Earliest arrival at each stop on a vehicle. Walking on is allowed only
+    // from these, so a walk is never chained onto another walk.
+    std::vector<int32_t> by_vehicle(tt.num_stops(), kUnreachable);
+    int32_t start = kUnreachable;
+    for (const Departure& d : sources) {
+        if (d.stop < 0 || d.stop >= tt.num_stops()) {
+            throw std::out_of_range("source stop index out of range");
+        }
+        arrival[d.stop] = std::min(arrival[d.stop], d.time);
+        start = std::min(start, d.time);
+    }
+    if (sources.empty()) return arrival;
+
+    const auto& conns = tt.connections();
+    auto it = std::lower_bound(conns.begin(), conns.end(), start,
+                               [](const Connection& c, int32_t t) { return c.dep_time < t; });
+    for (; it != conns.end() && it->dep_time <= latest_departure; ++it) {
+        // Boarding needs us at the stop by departure. A traveller already on
+        // this trip passes the same test: they reached dep_stop at this trip's
+        // arrival there, which is no later than its departure.
+        if (arrival[it->dep_stop] > it->dep_time || it->arr_time >= by_vehicle[it->arr_stop]) {
+            continue;
+        }
+        by_vehicle[it->arr_stop] = it->arr_time;
+        arrival[it->arr_stop] = std::min(arrival[it->arr_stop], it->arr_time);
+        for (const Footpath& walk : tt.footpaths(it->arr_stop)) {
+            arrival[walk.to] = std::min(arrival[walk.to], it->arr_time + walk.duration);
+        }
+    }
+    return arrival;
+}
+
 std::vector<int32_t> earliest_arrival(const Timetable& tt, int32_t source,
                                       int32_t departure_time) {
     if (source < 0 || source >= tt.num_stops()) {
         throw std::out_of_range("source stop index out of range");
     }
-    std::vector<int32_t> arrival(tt.num_stops(), kUnreachable);
-    arrival[source] = departure_time;
+    std::vector<Departure> sources{{source, departure_time}};
+    for (const Footpath& walk : tt.footpaths(source)) {
+        sources.push_back({walk.to, departure_time + walk.duration});
+    }
+    return earliest_arrival(tt, sources);
+}
 
-    const auto& conns = tt.connections();
-    auto it = std::lower_bound(conns.begin(), conns.end(), departure_time,
-                               [](const Connection& c, int32_t t) { return c.dep_time < t; });
-    for (; it != conns.end(); ++it) {
-        if (arrival[it->dep_stop] <= it->dep_time && it->arr_time < arrival[it->arr_stop]) {
-            arrival[it->arr_stop] = it->arr_time;
+namespace {
+
+// For each point, the stops within `max_m` and the walk there in seconds.
+std::vector<std::vector<Footpath>> stops_near(const Timetable& tt, const PointGrid& stop_grid,
+                                              const std::vector<LatLon>& points, double max_m,
+                                              double speed) {
+    std::vector<std::vector<Footpath>> near(points.size());
+    for (size_t i = 0; i < points.size(); ++i) {
+        for (const auto& [stop, d] : stop_grid.within(points[i].lat, points[i].lon, max_m)) {
+            near[i].push_back({stop, static_cast<int32_t>(std::ceil(d / speed))});
         }
     }
-    return arrival;
+    return near;
+}
+
+}  // namespace
+
+std::vector<int32_t> travel_time_matrix(const Timetable& tt, const std::vector<LatLon>& origins,
+                                        const std::vector<LatLon>& destinations,
+                                        const std::vector<int32_t>& departure_times,
+                                        const MatrixOptions& options) {
+    if (!(options.max_access_m >= 0)) throw std::invalid_argument("max_access_m must be >= 0");
+    if (!(options.walk_speed_mps > 0)) throw std::invalid_argument("walk_speed_mps must be > 0");
+    if (options.max_travel_time < 0) throw std::invalid_argument("max_travel_time must be >= 0");
+
+    const size_t n_orig = origins.size(), n_dep = departure_times.size(),
+                 n_dest = destinations.size();
+    std::vector<int32_t> result(n_orig * n_dep * n_dest, kUnreachable);
+    if (result.empty()) return result;
+
+    const double cell = std::max(options.max_access_m, 1.0);
+    const PointGrid stop_grid(tt.stop_lats(), tt.stop_lons(), cell);
+    const auto access = stops_near(tt, stop_grid, origins, options.max_access_m, options.walk_speed_mps);
+    const auto egress = stops_near(tt, stop_grid, destinations, options.max_access_m, options.walk_speed_mps);
+
+    std::vector<double> dest_lats, dest_lons;
+    for (const LatLon& p : destinations) {
+        dest_lats.push_back(p.lat);
+        dest_lons.push_back(p.lon);
+    }
+    const PointGrid dest_grid(dest_lats, dest_lons, cell);
+
+    const auto route_origin = [&](size_t o) {
+        std::vector<Footpath> direct;  // destination index, walk seconds
+        for (const auto& [d, m] : dest_grid.within(origins[o].lat, origins[o].lon, options.max_access_m)) {
+            direct.push_back({d, static_cast<int32_t>(std::ceil(m / options.walk_speed_mps))});
+        }
+        std::vector<Departure> sources;
+        for (size_t k = 0; k < n_dep; ++k) {
+            const int32_t dep = departure_times[k];
+            // int64 so that an unbounded travel time cannot overflow.
+            const int64_t bound = static_cast<int64_t>(dep) + options.max_travel_time;
+            const auto latest = static_cast<int32_t>(std::min<int64_t>(bound, kUnreachable));
+            int32_t* row = &result[(o * n_dep + k) * n_dest];
+
+            for (const Footpath& walk : direct) row[walk.to] = walk.duration;
+            if (access[o].empty()) continue;
+            sources.clear();
+            for (const Footpath& walk : access[o]) sources.push_back({walk.to, dep + walk.duration});
+            const auto arrival = earliest_arrival(tt, sources, latest);
+            for (size_t d = 0; d < n_dest; ++d) {
+                for (const Footpath& walk : egress[d]) {
+                    if (arrival[walk.to] == kUnreachable) continue;
+                    row[d] = std::min(row[d], arrival[walk.to] + walk.duration - dep);
+                }
+            }
+        }
+        if (options.max_travel_time != kUnreachable) {
+            int32_t* block = &result[o * n_dep * n_dest];
+            for (size_t i = 0; i < n_dep * n_dest; ++i) {
+                if (block[i] > options.max_travel_time) block[i] = kUnreachable;
+            }
+        }
+    };
+
+    size_t n_threads = options.threads > 0 ? static_cast<size_t>(options.threads)
+                                           : std::max(1u, std::thread::hardware_concurrency());
+    n_threads = std::min(n_threads, n_orig);
+    std::atomic<size_t> next{0};
+    const auto worker = [&] {
+        for (size_t o; (o = next++) < n_orig;) route_origin(o);
+    };
+    std::vector<std::thread> pool;
+    for (size_t i = 1; i < n_threads; ++i) pool.emplace_back(worker);
+    worker();
+    for (auto& t : pool) t.join();
+    return result;
 }
 
 }  // namespace transit

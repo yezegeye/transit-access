@@ -1,4 +1,5 @@
 #pragma once
+#include <cmath>
 #include <cstdint>
 #include <istream>
 #include <limits>
@@ -39,6 +40,12 @@ struct Connection {
     int32_t trip;
 };
 
+// A walk from one stop to another, `duration` seconds long.
+struct Footpath {
+    int32_t to;
+    int32_t duration;
+};
+
 class Timetable {
 public:
     // Reads stops.txt and stop_times.txt from a GTFS directory. Every trip is
@@ -54,11 +61,27 @@ public:
 
     int32_t num_stops() const { return static_cast<int32_t>(stop_ids_.size()); }
     const std::vector<std::string>& stop_ids() const { return stop_ids_; }
+    // WGS84 coordinates from stops.txt, parallel to stop_ids(). NaN when the
+    // stop_lat/stop_lon columns are absent or a stop leaves them empty (GTFS
+    // allows that for generic nodes and boarding areas).
+    const std::vector<double>& stop_lats() const { return stop_lats_; }
+    const std::vector<double>& stop_lons() const { return stop_lons_; }
     // Throws std::out_of_range for an unknown stop_id.
     int32_t stop_index(const std::string& stop_id) const;
 
     // Sorted by departure time.
     const std::vector<Connection>& connections() const { return connections_; }
+
+    // Replaces the footpaths with a walk between every pair of stops at most
+    // `max_distance_m` apart (straight-line haversine distance), taking
+    // distance / `walk_speed_mps` seconds, rounded up. Stops without
+    // coordinates get none. Returns the number of footpaths (each direction
+    // counts once). Throws std::invalid_argument for a negative distance or a
+    // non-positive speed.
+    size_t generate_footpaths(double max_distance_m, double walk_speed_mps);
+    // Footpaths leaving `stop`, in increasing order of destination stop.
+    const std::vector<Footpath>& footpaths(int32_t stop) const { return footpaths_[stop]; }
+    size_t num_footpaths() const { return num_footpaths_; }
 
 private:
     static Timetable load(std::istream& stops, std::istream& stop_times,
@@ -66,13 +89,66 @@ private:
 
     std::vector<std::string> stop_ids_;
     std::unordered_map<std::string, int32_t> stop_index_;
+    std::vector<double> stop_lats_;
+    std::vector<double> stop_lons_;
     std::vector<Connection> connections_;
+    std::vector<std::vector<Footpath>> footpaths_;  // indexed by stop
+    size_t num_footpaths_ = 0;
 };
 
-// Connection Scan Algorithm: earliest arrival time at every stop when leaving
-// `source` at `departure_time`. Transfers are instantaneous and there are no
-// footpaths between stops. Unreachable stops get kUnreachable.
+// A way to start a journey: be at `stop` at `time`.
+struct Departure {
+    int32_t stop;
+    int32_t time;
+};
+
+// Connection Scan Algorithm: earliest arrival time at every stop when the
+// journey can start from any of `sources`. Transfers between vehicles at the
+// same stop are instantaneous. After each ride the traveller may take one
+// footpath from Timetable::footpaths() (walks are not chained); sources do not
+// get a walk, since a caller-supplied source is usually already the end of a
+// walk. Connections departing after `latest_departure` are ignored, which
+// bounds the scan. Unreachable stops get kUnreachable.
+std::vector<int32_t> earliest_arrival(const Timetable& tt, const std::vector<Departure>& sources,
+                                      int32_t latest_departure = kUnreachable);
+
+// Earliest arrival at every stop when leaving stop `source` at
+// `departure_time`. The traveller may first walk one footpath from `source`,
+// then ride, walking one footpath after each ride.
 std::vector<int32_t> earliest_arrival(const Timetable& tt, int32_t source,
                                       int32_t departure_time);
+
+// A WGS84 point in degrees, e.g. a census tract centroid.
+struct LatLon {
+    double lat;
+    double lon;
+};
+
+struct MatrixOptions {
+    // Longest walk from an origin to its first stop and from the last stop to
+    // a destination, straight-line metres. Also the longest walk-only trip.
+    double max_access_m = 800.0;
+    double walk_speed_mps = 1.3;
+    // Journeys taking longer than this many seconds count as unreachable;
+    // a bound also stops each scan early.
+    int32_t max_travel_time = kUnreachable;
+    // Worker threads; 0 uses std::thread::hardware_concurrency().
+    int threads = 0;
+};
+
+// Door-to-door travel time in seconds from every origin to every destination
+// for each departure time, as a row-major array indexed
+// [origin][departure][destination]; kUnreachable where there is no journey.
+// A journey walks from the origin to a stop within max_access_m, rides with
+// the timetable's footpaths as transfers, then walks from a stop to the
+// destination within max_access_m; an origin within max_access_m of a
+// destination may also just walk there. Travel time counts from the
+// departure time, so it includes waiting for the first vehicle. Points with
+// NaN coordinates are unreachable. Throws std::invalid_argument for a
+// negative access distance, a non-positive speed or a negative travel bound.
+std::vector<int32_t> travel_time_matrix(const Timetable& tt, const std::vector<LatLon>& origins,
+                                        const std::vector<LatLon>& destinations,
+                                        const std::vector<int32_t>& departure_times,
+                                        const MatrixOptions& options = {});
 
 }  // namespace transit
