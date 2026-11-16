@@ -1,4 +1,5 @@
-"""Router answers for a few station-to-station trips, to compare by hand
+"""Router answers (with no minimum transfer time) for a few station-to-station
+trips, to compare by hand
 against a trip planner (CTA/RTA trip planner or Google Maps transit, set to
 leave at the same time on the same date, buses and 'L' only).
 
@@ -16,7 +17,7 @@ from job_access import GTFS_DIR, Scenario, import_router
 # (from, to) as GTFS parent-station ids, with names for the trip planner.
 TRIPS = [
     ("40890", "40380", "O'Hare -> Clark/Lake", "one Blue Line ride"),
-    ("40900", "41400", "Howard -> Roosevelt", "one Red Line ride"),
+    ("40900", "41400", "Howard -> Roosevelt", "Red Line, or Purple Express then Red"),
     ("40930", "41420", "Midway -> Addison (Red)", "Orange then Red"),
     ("41290", "40450", "Kimball -> 95th/Dan Ryan", "Brown then Red"),
     ("41280", "40930", "Jefferson Park -> Midway", "no single obvious route"),
