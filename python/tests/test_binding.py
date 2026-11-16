@@ -148,3 +148,18 @@ def test_min_transfer_time():
     assert tr.earliest_arrival(tt, "A", t("08:00:00"))["D"] == t("08:35:00")
     with pytest.raises(ValueError):
         tt.min_transfer_time = -1
+
+
+def test_arrival_times(tt):
+    arr = tr.arrival_times(tt, "A", t("08:00:00"))
+    assert arr.dtype == np.int32 and arr.shape == (5,)
+    assert arr.tolist() == [t("08:00:00"), t("08:10:00"), t("08:20:00"), t("08:25:00"), tr.UNREACHABLE]
+    capped = tr.arrival_times(tt, "A", t("08:00:00"), max_seconds=20 * 60)
+    assert capped.tolist()[3] == tr.UNREACHABLE  # D at 08:25 is beyond 20 minutes
+    assert capped.tolist()[2] == t("08:20:00")
+
+
+def test_connection_arrays(tt):
+    c = tr.connection_arrays(tt)
+    assert len(c["dep_time"]) == tt.num_connections == 5
+    assert (np.diff(c["dep_time"]) >= 0).all()

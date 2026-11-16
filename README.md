@@ -57,8 +57,8 @@ The router is complete for the accessibility analysis.
 3. ~~Access by income~~ (done, see [Access and income](#access-and-income)).
 4. ~~Maps of access by tract~~ (done).
 
-Still to do: a C++ vs. Python benchmark, one profiling pass,
-`docs/decisions.md` and a single command that rebuilds every result.
+Still to do: `docs/decisions.md` and a single command that rebuilds every
+result.
 
 ## Validation
 
@@ -88,6 +88,58 @@ at Roosevelt, while the router allowed a 1-minute walk. This led to the
 2-minute minimum transfer time used in the analysis. Kimball to 95th is
 still about 6 minutes faster than Google even with a 5-minute transfer,
 probably because Google chose a different route.
+
+## Performance
+
+Measured on a 2020 MacBook (Intel Core i5-1038NG7, 4 cores / 8 threads),
+CTA weekday: 1.2M connections, 11,138 stops, 144K footpaths, 2-minute
+transfers.
+
+**C++ against pure Python.** `python analysis/benchmark.py` runs the same
+Connection Scan, ported line by line to plain Python lists, on 200 random
+queries (a stop, a departure between 7 and 9 AM, every stop reached within
+90 minutes), checks that both give identical answers, then times them
+(`results/benchmark.csv`):
+
+| Implementation | Queries per second | p50 per query | p99 per query |
+|---|---|---|---|
+| C++ (called from Python) | 816 | 1.20 ms | 1.83 ms |
+| Pure Python | 32 | 31.2 ms | 43.6 ms |
+
+The C++ router is 26 times faster at the median. Both run the same
+algorithm on the same data, so the gap comes from the language: compiled
+code over packed integer arrays against interpreted bytecode handling
+boxed Python integers.
+
+**The full analysis.** 793 origins x 121 departures x 1,331 destinations
+(`build/bench_matrix`, which times `travel_time_matrix` alone): 53 s on one
+thread, 11 s on 8 threads.
+
+**Profiling.** macOS `sample` on the full analysis put about 85% of samples
+in the connection scan, most of the rest in adding the final walk to each
+destination tract and in per-query memory allocation. Counting the work in
+one query (60 minutes of connections from a random stop) showed where the
+scan's time goes: 75K connections examined, of which 7.9K could be boarded
+and 3.2K improved an arrival; 45K footpath updates; and 39K lookups to add
+the final walk to destinations. About 160K small memory operations at
+roughly 3 ns each. Two fixes were tried and measured with interleaved runs,
+best of five:
+
+| Version | 40 origins, 1 thread |
+|---|---|
+| Original | 2.08 s |
+| Footpaths in one flat array instead of one vector per stop | 2.08 s |
+| Flat array, and per-query arrays reused across queries | 2.08 s |
+
+Neither helped, so both were reverted to keep the simpler code. (A first
+attempt at reusing arrays was about 8% *slower*: with the arrays behind a
+reference, writes to the `char` trip flags may alias anything, so the
+compiler reloaded every array's address after each write. Taking plain
+pointers fixed that.) The scan is bound by the number of connections it
+must look at, not by memory layout or allocation. The next real speedup
+would be algorithmic: reusing work across the 121 departure times
+(profile Connection Scan or rRAPTOR) instead of routing each one from
+scratch.
 
 ## Analysis data
 
@@ -205,12 +257,13 @@ with transfers. The conclusion holds at every setting.
   and routing, `geo.*` for distances and the spatial grid) and pybind11
   bindings (`transit_router`)
 - `cpp/tests/` — Catch2 unit tests
+- `cpp/bench/` — `bench_matrix`, a timing harness for the full analysis workload
 - `python/tests/` — pytest tests against the compiled module
 - `analysis/` — Python analysis scripts (`prep_data.py`, `job_access.py`,
-  `plot_job_access.py`, `equity.py`, `sensitivity.py`, `check_trips.py`) and
-  their tests
+  `plot_job_access.py`, `equity.py`, `sensitivity.py`, `check_trips.py`,
+  `benchmark.py`) and their tests
 - `results/` — figures and result tables (`access.csv`, `equity.csv`,
-  `sensitivity.csv`)
+  `sensitivity.csv`, `benchmark.csv`)
 - `data/fixtures/` — small hand-made GTFS feeds used by the tests
 - `data/raw/` — downloaded GTFS feeds and census files (git-ignored)
 - `data/processed/` — outputs of `analysis/prep_data.py` (git-ignored, rebuilt by the script)
@@ -235,6 +288,11 @@ import datetime
 saturday = tr.Timetable.from_gtfs_dir("data/fixtures/tiny", date=datetime.date(2026, 10, 17))
 tr.earliest_arrival(saturday, "A", tr.parse_gtfs_time("08:00:00"))
 # {'A': 28800, 'D': 31200}
+
+# Arrival time at every stop as a NumPy array (indexed like tt.stop_ids),
+# leaving out stops not reached within max_seconds; the route to one stop:
+tr.arrival_times(tt, "A", tr.parse_gtfs_time("08:00:00"), max_seconds=3600)
+tr.journey(tt, "A", tr.parse_gtfs_time("08:00:00"), "D")
 
 # Door-to-door travel times between (lat, lon) points for several departures,
 # as an array of shape (origins, departures, destinations) in seconds:
