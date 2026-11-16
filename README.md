@@ -36,8 +36,10 @@ The router is complete for the accessibility analysis.
 
 **Current limitations**
 
-- Walking distances are straight lines, not along streets, so walks are
-  somewhat optimistic (real walks are typically 20-40% longer).
+- Walking distances are straight lines, not along streets. The analysis
+  compensates with a 1.2 detour factor folded into the walking speed, which
+  is right on average but not for any particular walk (a river or rail yard
+  can make the real walk much longer).
 - Walks are not chained: one walk after each ride, plus the walks to the
   first stop and from the last. `transfers.txt` is ignored.
 - Transfers have no minimum time: a rider can step off one vehicle and onto
@@ -80,23 +82,25 @@ Census API, which now requires a key.
 
 `python analysis/job_access.py` routes from every Chicago tract's population
 centroid to every Cook County tract's, leaving every minute from 7:00 to
-9:00 AM on Wednesday 18 Nov 2026 (CTA weekday service), with up to 800 m of
-walking at each end and 400 m between stops at 1.3 m/s. For each pair it takes
-the median travel time over the 121 departures, then counts the jobs in every
-tract reachable within 30, 45 and 60 minutes (793 x 1,331 tracts x 121
-departures: about 13 s on 8 cores). Output: `data/processed/job_access.csv`
-and the median travel-time matrix `travel_times.npz`.
+9:00 AM on Wednesday 18 Nov 2026 (CTA weekday service). Walks are measured
+as straight lines up to 800 m at each end and 400 m between stops, and
+walked at 5 km/h along streets assumed 1.2 times the straight-line distance
+(1.157 m/s over the straight line). For each pair it takes the median travel
+time over the 121 departures, then counts the jobs in every tract reachable
+within 30, 45 and 60 minutes (793 x 1,331 tracts x 121 departures: about 10 s
+on 8 cores). Output: `data/processed/job_access.csv` and the median
+travel-time matrix `travel_times.npz`.
 `python analysis/plot_job_access.py` draws `results/job_access_map.png`.
 
 | Within | Median Chicago tract | 10th percentile | 90th percentile |
 |---|---|---|---|
-| 30 min | 61,538 jobs (2% of Cook County) | 14,135 | 777,314 |
-| 45 min | 812,253 (30%) | 56,524 | 1,142,561 |
-| 60 min | 1,209,274 (45%) | 666,434 | 1,399,434 |
+| 30 min | 52,423 jobs (2% of Cook County) | 12,129 | 728,119 |
+| 45 min | 770,438 (29%) | 52,043 | 1,122,038 |
+| 60 min | 1,190,988 (44%) | 602,049 | 1,376,492 |
 
 The jump from 30 to 45 minutes is the Loop: its three largest tracts alone
 hold about 450,000 jobs, a sixth of Cook County's, and the median trip to the
-central Loop tract takes 38 minutes.
+central Loop tract takes 39 minutes.
 The model covers CTA only, so places served mainly by Metra or Pace (two
 Far Northwest Side tracts have no CTA stop within 800 m) score low, and
 suburban job centers are under-counted as destinations.

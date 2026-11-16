@@ -39,10 +39,18 @@ class Scenario:
     window_start: int = 7 * 3600  # 7:00 AM
     window_end: int = 9 * 3600  # 9:00 AM, inclusive
     step: int = 60  # a departure every minute
-    transfer_walk_m: float = 400.0  # longest walk between stops
-    access_walk_m: float = 800.0  # longest walk from home / to work
-    walk_speed_mps: float = 1.3
+    transfer_walk_m: float = 400.0  # longest walk between stops, straight line
+    access_walk_m: float = 800.0  # longest walk from home / to work, straight line
+    walk_kmh: float = 5.0  # walking pace along streets
+    walk_detour: float = 1.2  # street distance / straight-line distance
     thresholds_min: tuple[int, ...] = (30, 45, 60)
+
+    @property
+    def walk_speed_mps(self) -> float:
+        """Speed over straight-line distance: the router measures walks as
+        straight lines, so the detour is folded into the speed
+        (5 km/h with a 1.2 detour = 1.157 m/s)."""
+        return self.walk_kmh / 3.6 / self.walk_detour
 
     @property
     def departures(self) -> list[int]:
