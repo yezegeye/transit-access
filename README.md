@@ -42,8 +42,9 @@ The router is complete for the accessibility analysis.
   can make the real walk much longer).
 - Walks are not chained: one walk after each ride, plus the walks to the
   first stop and from the last. `transfers.txt` is ignored.
-- Transfers have no minimum time: a rider can step off one vehicle and onto
-  another departing the same second.
+- Changing vehicles takes the same fixed time everywhere (2 minutes in the
+  analysis), though real CTA transfers range from across the platform to a
+  long tunnel. See the sensitivity check.
 - A service day includes its own trips that run past midnight (times after
   24:00:00) but not the previous day's late-night trips.
 - Stop times without an arrival/departure time (non-timepoints) are rejected
@@ -56,10 +57,37 @@ The router is complete for the accessibility analysis.
 3. ~~Access by income~~ (done, see [Access and income](#access-and-income)).
 4. ~~Maps of access by tract~~ (done).
 
-Still to do: hand-check trips against the CTA trip planner, a test that
-leaving later never arrives earlier, a C++ vs. Python benchmark, one
-profiling pass, `docs/decisions.md` and a single command that rebuilds
-every result.
+Still to do: a C++ vs. Python benchmark, one profiling pass,
+`docs/decisions.md` and a single command that rebuilds every result.
+
+## Validation
+
+Besides the unit tests, randomized checks compare the scan with an
+order-independent reference, confirm that leaving later never arrives
+earlier (also on the full CTA weekday: no violations in 40M comparisons) and
+check every reconstructed journey against the timetable.
+
+Five station-to-station trips leaving 8:00 AM on Wed 18 Nov 2026 were
+compared with Google Maps (bus and subway only), using
+`python analysis/check_trips.py`, which prints the router's route. Times
+are ride minutes from the first boarding, with no minimum transfer time:
+
+| Trip | Router's route | Router | Google |
+|---|---|---|---|
+| O'Hare to Clark/Lake | Blue | 40.5 | 39 |
+| Howard to Roosevelt | Purple Express to Wilson, then Red | 35 | 39 |
+| Midway to Addison | Orange to Roosevelt, then Red | 47.7 | 54 |
+| Kimball to 95th/Dan Ryan | Brown to Belmont, then Red | 62.5 | 72 |
+| Jefferson Park to Midway | Blue to Clark/Lake, then Orange | 57.5 | 62 |
+
+The router's ride times match CTA's published schedule to the second (for
+O'Hare to Clark/Lake, the 8:00:30 train arrives 8:41:00). The gaps on
+transfer trips come from transfer time: Google took the same Orange Line
+train from Midway but allowed about 9 minutes for the tunnel to the Red Line
+at Roosevelt, while the router allowed a 1-minute walk. This led to the
+2-minute minimum transfer time used in the analysis. Kimball to 95th is
+still about 6 minutes faster than Google even with a 5-minute transfer,
+probably because Google chose a different route.
 
 ## Analysis data
 
@@ -90,22 +118,22 @@ centroid to every Cook County tract's, leaving every minute from 7:00 to
 9:00 AM on Wednesday 18 Nov 2026 (CTA weekday service). Walks are measured
 as straight lines up to 800 m at each end and 400 m between stops, and
 walked at 5 km/h along streets assumed 1.2 times the straight-line distance
-(1.157 m/s over the straight line). For each pair it takes the median travel
-time over the 121 departures, then counts the jobs in every tract reachable
-within 30, 45 and 60 minutes (793 x 1,331 tracts x 121 departures: about 10 s
-on 8 cores). Output: `data/processed/job_access.csv` and the median
+(1.157 m/s over the straight line). Changing vehicles takes 2 minutes on top
+of any walk. For each pair it takes the median travel time over the 121
+departures, then counts the jobs in every tract reachable within 30, 45 and
+60 minutes (793 x 1,331 tracts x 121 departures: about 14 s on 8 cores). Output: `data/processed/job_access.csv` and the median
 travel-time matrix `travel_times.npz`.
 `python analysis/plot_job_access.py` draws `results/job_access_map.png`.
 
 | Within | Median Chicago tract | 10th percentile | 90th percentile |
 |---|---|---|---|
-| 30 min | 52,423 jobs (2% of Cook County) | 12,129 | 728,119 |
-| 45 min | 770,438 (29%) | 52,043 | 1,122,038 |
-| 60 min | 1,190,988 (44%) | 602,049 | 1,376,492 |
+| 30 min | 46,225 jobs (2% of Cook County) | 10,622 | 667,716 |
+| 45 min | 633,132 (23%) | 41,013 | 1,076,056 |
+| 60 min | 1,131,815 (42%) | 295,355 | 1,321,173 |
 
 The jump from 30 to 45 minutes is the Loop: its three largest tracts alone
 hold about 450,000 jobs, a sixth of Cook County's, and the median trip to the
-central Loop tract takes 39 minutes.
+central Loop tract takes 40 minutes.
 The model covers CTA only, so places served mainly by Metra or Pace (two
 Far Northwest Side tracts have no CTA stop within 800 m) score low, and
 suburban job centers are under-counted as destinations.
@@ -121,19 +149,19 @@ tract), `results/equity.csv` (per quartile) and the two figures below.
 
 | Income quartile | Median income | Mean jobs within 30 min | 45 min | 60 min | Households without a car |
 |---|---|---|---|---|---|
-| Q1 (lowest) | $13.6K-51.0K | 111,724 | 584,859 | 1,051,197 | 36% |
-| Q2 | $51.0K-72.6K | 89,367 | 510,392 | 1,019,173 | 25% |
-| Q3 | $72.9K-101.0K | 151,949 | 610,108 | 1,044,351 | 22% |
-| Q4 (highest) | $101.1K-250K+ | 402,643 | 872,536 | 1,198,027 | 25% |
-| **Q4 / Q1** | | **3.6x** | **1.5x** | **1.1x** | |
+| Q1 (lowest) | $13.6K-51.0K | 96,260 | 500,663 | 976,633 | 36% |
+| Q2 | $51.0K-72.6K | 73,995 | 438,171 | 925,419 | 25% |
+| Q3 | $72.9K-101.0K | 126,146 | 519,987 | 967,479 | 22% |
+| Q4 (highest) | $101.1K-250K+ | 363,138 | 816,191 | 1,124,276 | 25% |
+| **Q4 / Q1** | | **3.8x** | **1.6x** | **1.2x** | |
 
-Spearman rank correlation between income and jobs reachable: 0.36 (30 min),
-0.35 (45 min), 0.43 (60 min).
+Spearman rank correlation between income and jobs reachable: 0.37 (30 min),
+0.33 (45 min), 0.40 (60 min).
 
 What this shows:
 
-- Tracts in the highest income quartile reach 1.5 times as many jobs within
-  45 minutes as the lowest, and 3.6 times as many within 30. The gap narrows
+- Tracts in the highest income quartile reach 1.6 times as many jobs within
+  45 minutes as the lowest, and 3.8 times as many within 30. The gap narrows
   with longer trips: within an hour, most of the city reaches the Loop.
 - Access does not fall steadily with income. The lowest quartile does better
   than the second: more of its tracts sit close to the Loop, on the Near
@@ -141,8 +169,9 @@ What this shows:
   second quartile). The highest quartile is the closest by far (median
   7.3 km, against 11-12 km for the others), mostly on the North Side.
 - At 45 minutes tracts split into two groups, those that reach the Loop
-  (over 500K jobs) and those that do not (under about 300K): for most
-  tracts, the time to downtown decides the score.
+  (473 tracts over 500K jobs) and those that do not (308 under 300K, with
+  only 12 in between): for most tracts, the time to downtown decides the
+  score.
 
 What it does not show: why the gap exists, whether residents actually work
 at the reachable jobs (LODES counts jobs where they are, regardless of skill
@@ -152,6 +181,24 @@ has the most car-free households (36%), so it depends on transit most.
 ![Jobs reachable by income quartile](results/access_by_quartile.png)
 ![Job access against income](results/access_vs_income.png)
 
+### Sensitivity to the transfer time
+
+How long it takes to change vehicles is the least certain setting: a
+trip-planner check found CTA transfers ranging from across the platform
+(Belmont, Wilson) to a long tunnel (Roosevelt, about 9 minutes in Google
+Maps). `python analysis/sensitivity.py` reruns everything at 0, 2 and 5
+minutes (`results/sensitivity.csv`):
+
+| Transfer time | Median tract, jobs within 45 min | Top / bottom quartile, 30 min | 45 min | 60 min | Spearman, 45 min |
+|---|---|---|---|---|---|
+| 0 min | 770,438 | 3.60x | 1.49x | 1.14x | 0.35 |
+| **2 min (headline)** | **633,132** | **3.77x** | **1.63x** | **1.15x** | **0.33** |
+| 5 min | 534,095 | 4.04x | 1.79x | 1.19x | 0.33 |
+
+Slower transfers lower everyone's access, but the gap between the highest
+and lowest income quartiles grows: lower-income tracts rely more on trips
+with transfers. The conclusion holds at every setting.
+
 ## Layout
 
 - `cpp/` — routing core (static library `router`: `router.*` for GTFS loading
@@ -160,8 +207,10 @@ has the most car-free households (36%), so it depends on transit most.
 - `cpp/tests/` — Catch2 unit tests
 - `python/tests/` — pytest tests against the compiled module
 - `analysis/` — Python analysis scripts (`prep_data.py`, `job_access.py`,
-  `plot_job_access.py`, `equity.py`) and their tests
-- `results/` — figures and result tables (`access.csv`, `equity.csv`)
+  `plot_job_access.py`, `equity.py`, `sensitivity.py`, `check_trips.py`) and
+  their tests
+- `results/` — figures and result tables (`access.csv`, `equity.csv`,
+  `sensitivity.csv`)
 - `data/fixtures/` — small hand-made GTFS feeds used by the tests
 - `data/raw/` — downloaded GTFS feeds and census files (git-ignored)
 - `data/processed/` — outputs of `analysis/prep_data.py` (git-ignored, rebuilt by the script)

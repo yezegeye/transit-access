@@ -43,7 +43,7 @@ class Scenario:
     access_walk_m: float = 800.0  # longest walk from home / to work, straight line
     walk_kmh: float = 5.0  # walking pace along streets
     walk_detour: float = 1.2  # street distance / straight-line distance
-    min_transfer_s: int = 0  # extra time to change vehicles, on top of any walk
+    min_transfer_s: int = 120  # extra time to change vehicles, on top of any walk
     thresholds_min: tuple[int, ...] = (30, 45, 60)
 
     @property
