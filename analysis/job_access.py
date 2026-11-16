@@ -97,6 +97,9 @@ def jobs_within(travel_s: np.ndarray, jobs: np.ndarray, minutes: int) -> np.ndar
 def compute(tracts: pd.DataFrame, scenario: Scenario) -> tuple[pd.DataFrame, np.ndarray, pd.DataFrame, pd.DataFrame]:
     tr = import_router()
     tt = tr.Timetable.from_gtfs_dir(GTFS_DIR, date=scenario.service_date)
+    if tt.num_connections == 0:
+        raise SystemExit(f"The CTA feed in {GTFS_DIR} has no service on {scenario.service_date}; "
+                         "set Scenario.service_date to a weekday the feed covers (see calendar.txt).")
     tt.generate_footpaths(scenario.transfer_walk_m, scenario.walk_speed_mps)
     tt.min_transfer_time = scenario.min_transfer_s
 

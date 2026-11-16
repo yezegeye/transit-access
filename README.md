@@ -1,7 +1,37 @@
-# transit-access
+# Chicago Transit Access Analyzer
 
-A C++ public transit router with Python bindings, used to compute
-transit accessibility metrics (e.g. jobs reachable within N minutes) from GTFS data.
+How many jobs can each Chicago neighborhood reach by bus and 'L', and how
+does that vary with income? A transit router written in C++ (Connection Scan
+Algorithm, with Python bindings via pybind11) computes door-to-door travel
+times from every Chicago census tract to every Cook County tract, at every
+minute of the weekday morning peak, from CTA's published schedules. Python
+(pandas, geopandas) joins the results with job counts and census income data.
+
+## Headline
+
+On a weekday morning (median trip leaving 7-9 AM), **the median Chicago
+tract can reach 633,000 jobs within 45 minutes by CTA**, about a quarter of
+Cook County's 2.7 million. **Tracts in the highest income quartile reach 1.6
+times as many jobs within 45 minutes as the lowest quartile, and 3.8 times
+as many within 30.** The gap comes mostly from distance to the Loop, holds
+under every transfer-time assumption tested, and grows when transfers are
+slower. Details in [Access and income](#access-and-income); every setting
+and data source is in [docs/decisions.md](docs/decisions.md).
+
+![Jobs reachable by transit from each Chicago tract](results/job_access_map.png)
+
+## Reproduce
+
+```sh
+conda env create -f environment.yml && conda activate transit
+make            # build, run all tests, download data, regenerate every result
+make benchmark  # C++ vs. Python timings
+```
+
+`make` downloads about 170 MB of census and CTA data into `data/raw/` and
+takes a few minutes. CTA publishes only its current schedule, so a fresh
+download may not cover the analysis date; see
+[docs/decisions.md](docs/decisions.md#data) for the exact feed used.
 
 ## Status
 
@@ -50,15 +80,15 @@ The router is complete for the accessibility analysis.
 - Stop times without an arrival/departure time (non-timepoints) are rejected
   rather than interpolated.
 
-**Next (Python analysis)**
+**Possible extensions**
 
-1. ~~Data prep~~ (done, see [Analysis data](#analysis-data)).
-2. ~~Job access per tract~~ (done, see [Job access](#job-access)).
-3. ~~Access by income~~ (done, see [Access and income](#access-and-income)).
-4. ~~Maps of access by tract~~ (done).
-
-Still to do: `docs/decisions.md` and a single command that rebuilds every
-result.
+- Add Pace buses and Metra trains (both publish GTFS), which matter most
+  for the Far South and Northwest Sides.
+- Compare a late-evening and a Sunday run with the weekday morning.
+- Other destinations, such as grocery stores or clinics.
+- Speed: reuse work across departure times (profile Connection Scan or
+  RAPTOR) instead of routing each minute separately; see
+  [Performance](#performance).
 
 ## Validation
 
@@ -190,8 +220,6 @@ The model covers CTA only, so places served mainly by Metra or Pace (two
 Far Northwest Side tracts have no CTA stop within 800 m) score low, and
 suburban job centers are under-counted as destinations.
 
-![Jobs reachable by transit from each Chicago tract](results/job_access_map.png)
-
 ## Access and income
 
 `python analysis/equity.py` splits the 774 Chicago tracts with an ACS income
@@ -321,7 +349,8 @@ cmake --build build -j
 ```
 
 The Python module is written to `build/`; the root `conftest.py` puts that
-directory on `sys.path` for tests.
+directory on `sys.path` for tests, and the analysis scripts look there too.
+`make build` runs the same two commands.
 
 ## Test
 
@@ -329,3 +358,5 @@ directory on `sys.path` for tests.
 ctest --test-dir build --output-on-failure   # C++
 python -m pytest                             # Python (run inside the transit env)
 ```
+
+`make test` runs both.

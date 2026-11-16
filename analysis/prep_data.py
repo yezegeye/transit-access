@@ -22,6 +22,7 @@ import gzip
 import io
 import sys
 import urllib.request
+import zipfile
 from pathlib import Path
 
 import pandas as pd
@@ -36,6 +37,10 @@ CHICAGO_PLACE_FIPS = "14000"
 
 LODES_YEAR = 2024
 ACS_YEAR = 2024  # 2020-2024 5-year estimates; uses 2020 tract boundaries
+
+CTA_GTFS_URL = "https://www.transitchicago.com/downloads/sch_data/google_transit.zip"
+CTA_GTFS_ZIP = RAW / "cta" / "google_transit.zip"
+CTA_GTFS_DIR = RAW / "cta" / "gtfs"
 
 SOURCES = {
     "centroids": (
@@ -93,6 +98,19 @@ def download(url: str, path: Path) -> Path:
             out.write(chunk)
     tmp.rename(path)
     return path
+
+
+def ensure_cta_gtfs() -> Path:
+    """Download and unzip the CTA GTFS feed unless it is already there.
+
+    CTA publishes only its current feed, so a fresh download may not cover
+    the analysis date in job_access.py; docs/decisions.md records the feed
+    used for the published results."""
+    if not (CTA_GTFS_DIR / "stop_times.txt").exists():
+        download(CTA_GTFS_URL, CTA_GTFS_ZIP)
+        with zipfile.ZipFile(CTA_GTFS_ZIP) as z:
+            z.extractall(CTA_GTFS_DIR)
+    return CTA_GTFS_DIR
 
 
 def read_centroids(source: io.TextIOBase | Path, county: str = COUNTY_FIPS) -> pd.DataFrame:
@@ -200,6 +218,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--out", type=Path, default=PROCESSED, help="output directory")
     args = parser.parse_args(argv)
 
+    ensure_cta_gtfs()
     paths = {name: download(url, path) for name, (url, path) in SOURCES.items()}
     tracts = build(paths)
     problems = check(tracts, paths)

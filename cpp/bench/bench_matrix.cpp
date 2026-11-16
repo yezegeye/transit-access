@@ -8,6 +8,7 @@
 #include <fstream>
 #include <sstream>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "router.hpp"
@@ -18,7 +19,8 @@ int main(int argc, char** argv) {
         return 2;
     }
     const size_t max_origins = argc > 4 ? std::stoul(argv[4]) : 100;
-    const int threads = argc > 5 ? std::stoi(argv[5]) : 1;
+    int threads = argc > 5 ? std::stoi(argv[5]) : 1;
+    if (threads <= 0) threads = static_cast<int>(std::thread::hardware_concurrency());
 
     using clock = std::chrono::steady_clock;
     auto t = clock::now();
