@@ -405,41 +405,95 @@ static std::vector<int32_t> fixpoint_arrival(const Timetable& tt, int32_t source
     return arrival;
 }
 
+// A random feed: 30 stops scattered over about 1.1 km square and 60 trips of
+// 2-6 stops between 08:00 and 09:00, with 300 m footpaths at 1.3 m/s.
+static Timetable random_feed(std::mt19937& rng) {
+    const int n_stops = 30;
+    std::uniform_real_distribution<double> coord(0.0, 0.01);
+    std::string stops = "stop_id,stop_lat,stop_lon\n";
+    for (int s = 0; s < n_stops; ++s) {
+        stops += "S" + std::to_string(s) + "," + std::to_string(41.9 + coord(rng)) + "," +
+                 std::to_string(-87.6 + coord(rng)) + "\n";
+    }
+    std::string times = "trip_id,arrival_time,departure_time,stop_id,stop_sequence\n";
+    std::uniform_int_distribution<int> stop(0, n_stops - 1), start(8 * 3600, 9 * 3600),
+        hop(30, 600), dwell(0, 60), len(2, 6);
+    const auto hms = [](int t) {
+        char buf[16];
+        std::snprintf(buf, sizeof buf, "%02d:%02d:%02d", t / 3600, t / 60 % 60, t % 60);
+        return std::string(buf);
+    };
+    for (int trip = 0; trip < 60; ++trip) {
+        int t = start(rng);
+        const int n = len(rng);
+        for (int k = 0; k < n; ++k) {
+            const int arr = t;
+            const int dep = arr + (k + 1 < n ? dwell(rng) : 0);
+            times += "T" + std::to_string(trip) + "," + hms(arr) + "," + hms(dep) + ",S" +
+                     std::to_string(stop(rng)) + "," + std::to_string(k + 1) + "\n";
+            t = dep + hop(rng);
+        }
+    }
+    std::istringstream stops_in(stops), times_in(times);
+    Timetable tt = Timetable::from_gtfs(stops_in, times_in);
+    tt.generate_footpaths(300, 1.3);
+    return tt;
+}
+
 TEST_CASE("scan matches a fixpoint reference on random feeds") {
     std::mt19937 rng(11);
     for (int feed = 0; feed < 40; ++feed) {
-        const int n_stops = 30;
-        std::uniform_real_distribution<double> coord(0.0, 0.01);  // about 1.1 km square
-        std::string stops = "stop_id,stop_lat,stop_lon\n";
-        for (int s = 0; s < n_stops; ++s) {
-            stops += "S" + std::to_string(s) + "," + std::to_string(41.9 + coord(rng)) + "," +
-                     std::to_string(-87.6 + coord(rng)) + "\n";
-        }
-        std::string times = "trip_id,arrival_time,departure_time,stop_id,stop_sequence\n";
-        std::uniform_int_distribution<int> stop(0, n_stops - 1), start(8 * 3600, 9 * 3600),
-            hop(30, 600), dwell(0, 60), len(2, 6);
-        const auto hms = [](int t) {
-            char buf[16];
-            std::snprintf(buf, sizeof buf, "%02d:%02d:%02d", t / 3600, t / 60 % 60, t % 60);
-            return std::string(buf);
-        };
-        for (int trip = 0; trip < 60; ++trip) {
-            int t = start(rng);
-            const int n = len(rng);
-            for (int k = 0; k < n; ++k) {
-                const int arr = t;
-                const int dep = arr + (k + 1 < n ? dwell(rng) : 0);
-                times += "T" + std::to_string(trip) + "," + hms(arr) + "," + hms(dep) + ",S" +
-                         std::to_string(stop(rng)) + "," + std::to_string(k + 1) + "\n";
-                t = dep + hop(rng);
-            }
-        }
-        std::istringstream stops_in(stops), times_in(times);
-        Timetable tt = Timetable::from_gtfs(stops_in, times_in);
-        tt.generate_footpaths(300, 1.3);
+        const Timetable tt = random_feed(rng);
+        std::uniform_int_distribution<int> stop(0, tt.num_stops() - 1), start(8 * 3600, 9 * 3600);
         for (int q = 0; q < 10; ++q) {
             const int32_t source = stop(rng), t0 = start(rng);
             CHECK(earliest_arrival(tt, source, t0) == fixpoint_arrival(tt, source, t0));
+        }
+    }
+}
+
+// Leaving later never gets you anywhere earlier: whatever a later departure
+// can do, an earlier one can too by waiting (the FIFO property).
+TEST_CASE("leaving later never arrives earlier") {
+    std::mt19937 rng(23);
+    for (int feed = 0; feed < 20; ++feed) {
+        const Timetable tt = random_feed(rng);
+        std::uniform_int_distribution<int> stop(0, tt.num_stops() - 1);
+        for (int q = 0; q < 5; ++q) {
+            const int32_t source = stop(rng);
+            auto prev = earliest_arrival(tt, source, 7 * 3600 + 50 * 60);
+            for (int32_t t0 = 7 * 3600 + 51 * 60; t0 <= 9 * 3600; t0 += 60) {
+                const auto cur = earliest_arrival(tt, source, t0);
+                for (int32_t s = 0; s < tt.num_stops(); ++s) {
+                    // kUnreachable is the largest int32, so it counts as latest.
+                    REQUIRE(prev[s] <= cur[s]);
+                }
+                prev = cur;
+            }
+        }
+
+        // The same holds door to door: departure + travel time never falls.
+        using transit::LatLon;
+        std::vector<LatLon> points;
+        for (int32_t s = 0; s < tt.num_stops(); s += 3) {
+            points.push_back({tt.stop_lats()[s] + 0.0005, tt.stop_lons()[s]});  // ~55 m away
+        }
+        std::vector<int32_t> deps;
+        for (int32_t t0 = 7 * 3600 + 50 * 60; t0 <= 9 * 3600; t0 += 120) deps.push_back(t0);
+        transit::MatrixOptions opt;
+        opt.max_access_m = 300;
+        const auto m = transit::travel_time_matrix(tt, points, points, deps, opt);
+        const size_t n = points.size();
+        for (size_t o = 0; o < n; ++o) {
+            for (size_t d = 0; d < n; ++d) {
+                for (size_t k = 1; k < deps.size(); ++k) {
+                    const auto at = [&](size_t i) {
+                        const int32_t v = m[(o * deps.size() + i) * n + d];
+                        return v == kUnreachable ? int64_t{kUnreachable} : int64_t{deps[i]} + v;
+                    };
+                    REQUIRE(at(k - 1) <= at(k));
+                }
+            }
         }
     }
 }
