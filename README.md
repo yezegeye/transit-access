@@ -49,12 +49,33 @@ The router is complete for the accessibility analysis.
 
 **Next (Python analysis)**
 
-1. Data prep: census tract shapes and centroids (TIGER), jobs per tract (LEHD
-   LODES workplace data), median household income (ACS).
+1. ~~Data prep~~ (done, see [Analysis data](#analysis-data)).
 2. Job access per tract: jobs reachable within N minutes, using the median
    travel time over a 7-9 AM window.
 3. Income regression: how access relates to tract median household income.
 4. Maps of access by tract.
+
+## Analysis data
+
+`python analysis/prep_data.py` downloads the inputs (cached in `data/raw/`)
+and writes one row per Cook County census tract (2020 boundaries) to
+`data/processed/cook_tracts.gpkg` (with shapes) and `cook_tracts.csv`.
+
+| Field | Source |
+|---|---|
+| `lat`, `lon`, `pop_2020` | 2020 Census population-weighted tract centroids: the router starts and ends trips where people live, not at the geometric middle of a tract |
+| `geometry`, `land_m2` | Census cartographic boundary tracts (clipped to the shoreline, for maps) |
+| `in_chicago` | Centroid inside the City of Chicago boundary (Census places) |
+| `jobs`, `jobs_low_wage`, `jobs_mid_wage`, `jobs_high_wage` | LEHD LODES 8 workplace area characteristics, 2024, all jobs (JT00), summed from blocks to tracts; low/mid/high = up to $1,250, $1,251-$3,333, over $3,333 a month |
+| `median_income`, `median_income_moe` | ACS 2020-2024 5-year, table B19013 (top-coded at 250,001) |
+| `population`, `households`, `households_no_vehicle`, `share_no_vehicle` | ACS 2020-2024 5-year, tables B01003 and B08201 |
+
+The result: 1,331 Cook County tracts (793 in Chicago), 2.70M jobs (1.47M in
+Chicago), 5.18M people (2.71M in Chicago). The lake-only tract 17031990000 has
+no shape and is left out. 19 Chicago tracts have no income estimate: 3 have no
+residents (O'Hare, Midway, one industrial tract) and the Census suppressed
+the other 16 for small samples. The ACS summary files are used instead of the
+Census API, which now requires a key.
 
 ## Layout
 
@@ -63,8 +84,10 @@ The router is complete for the accessibility analysis.
   bindings (`transit_router`)
 - `cpp/tests/` — Catch2 unit tests
 - `python/tests/` — pytest tests against the compiled module
+- `analysis/` — Python analysis scripts (`prep_data.py`) and their tests
 - `data/fixtures/` — small hand-made GTFS feeds used by the tests
-- `data/raw/` — downloaded GTFS feeds (git-ignored)
+- `data/raw/` — downloaded GTFS feeds and census files (git-ignored)
+- `data/processed/` — outputs of `analysis/prep_data.py` (git-ignored, rebuilt by the script)
 
 ## Usage
 
