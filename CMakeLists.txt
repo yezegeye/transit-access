@@ -28,3 +28,6 @@ target_compile_definitions(router_tests PRIVATE
   TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/data/fixtures")
 enable_testing()
 add_test(NAME router_tests COMMAND router_tests)
+
+add_executable(bench_matrix cpp/bench/bench_matrix.cpp)
+target_link_libraries(bench_matrix PRIVATE router)

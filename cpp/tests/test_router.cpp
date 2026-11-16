@@ -383,63 +383,164 @@ TEST_CASE("loading a service day keeps only the trips running that day") {
     }
 }
 
-// Reference answer by repeated relaxation in arbitrary order until nothing
-// changes. It shares the one-walk-per-ride rule but not the scan's reliance on
-// processing connections in departure order.
+// Reference answer by repeated relaxation until nothing changes, sweeping
+// trips in an arbitrary order (each trip's own hops in sequence). It shares
+// the routing rules (one walk per ride, min_transfer_time to change vehicles)
+// but not the scan's reliance on processing connections in departure order.
 static std::vector<int32_t> fixpoint_arrival(const Timetable& tt, int32_t source, int32_t t0) {
-    std::vector<int32_t> arrival(tt.num_stops(), kUnreachable), ride(tt.num_stops(), kUnreachable);
-    arrival[source] = t0;
-    for (const auto& w : tt.footpaths(source)) arrival[w.to] = std::min(arrival[w.to], t0 + w.duration);
+    const int32_t n = tt.num_stops(), transfer = tt.min_transfer_time();
+    std::vector<int32_t> arrival(n, kUnreachable), ride(n, kUnreachable), ready(n, kUnreachable);
+    const auto reach = [&](int32_t s, int32_t t, int32_t r) {
+        arrival[s] = std::min(arrival[s], t);
+        ready[s] = std::min(ready[s], r);
+    };
+    reach(source, t0, t0);
+    for (const auto& w : tt.footpaths(source)) reach(w.to, t0 + w.duration, t0 + w.duration);
+
+    std::vector<std::vector<transit::Connection>> trips(tt.trip_ids().size());
+    for (const auto& c : tt.connections()) trips[c.trip].push_back(c);  // stays in trip order
     for (bool changed = true; changed;) {
         changed = false;
-        for (auto c = tt.connections().rbegin(); c != tt.connections().rend(); ++c) {
-            if (c->dep_time < t0 || arrival[c->dep_stop] > c->dep_time || c->arr_time >= ride[c->arr_stop]) continue;
-            ride[c->arr_stop] = c->arr_time;
-            arrival[c->arr_stop] = std::min(arrival[c->arr_stop], c->arr_time);
-            for (const auto& w : tt.footpaths(c->arr_stop)) {
-                arrival[w.to] = std::min(arrival[w.to], c->arr_time + w.duration);
+        for (auto trip = trips.rbegin(); trip != trips.rend(); ++trip) {
+            bool on = false;
+            for (const auto& c : *trip) {
+                on = on || (c.dep_time >= t0 && ready[c.dep_stop] <= c.dep_time);
+                if (!on || c.arr_time >= ride[c.arr_stop]) continue;
+                ride[c.arr_stop] = c.arr_time;
+                reach(c.arr_stop, c.arr_time, c.arr_time + transfer);
+                for (const auto& w : tt.footpaths(c.arr_stop)) {
+                    reach(w.to, c.arr_time + w.duration, c.arr_time + w.duration + transfer);
+                }
+                changed = true;
             }
-            changed = true;
         }
     }
     return arrival;
 }
 
+// A random feed: 30 stops scattered over about 1.1 km square and 60 trips of
+// 2-6 stops between 08:00 and 09:00, with 300 m footpaths at 1.3 m/s.
+static Timetable random_feed(std::mt19937& rng) {
+    const int n_stops = 30;
+    std::uniform_real_distribution<double> coord(0.0, 0.01);
+    std::string stops = "stop_id,stop_lat,stop_lon\n";
+    for (int s = 0; s < n_stops; ++s) {
+        stops += "S" + std::to_string(s) + "," + std::to_string(41.9 + coord(rng)) + "," +
+                 std::to_string(-87.6 + coord(rng)) + "\n";
+    }
+    std::string times = "trip_id,arrival_time,departure_time,stop_id,stop_sequence\n";
+    std::uniform_int_distribution<int> stop(0, n_stops - 1), start(8 * 3600, 9 * 3600),
+        hop(30, 600), dwell(0, 60), len(2, 6);
+    const auto hms = [](int t) {
+        char buf[16];
+        std::snprintf(buf, sizeof buf, "%02d:%02d:%02d", t / 3600, t / 60 % 60, t % 60);
+        return std::string(buf);
+    };
+    for (int trip = 0; trip < 60; ++trip) {
+        int t = start(rng);
+        const int n = len(rng);
+        for (int k = 0; k < n; ++k) {
+            const int arr = t;
+            const int dep = arr + (k + 1 < n ? dwell(rng) : 0);
+            times += "T" + std::to_string(trip) + "," + hms(arr) + "," + hms(dep) + ",S" +
+                     std::to_string(stop(rng)) + "," + std::to_string(k + 1) + "\n";
+            t = dep + hop(rng);
+        }
+    }
+    std::istringstream stops_in(stops), times_in(times);
+    Timetable tt = Timetable::from_gtfs(stops_in, times_in);
+    tt.generate_footpaths(300, 1.3);
+    return tt;
+}
+
 TEST_CASE("scan matches a fixpoint reference on random feeds") {
     std::mt19937 rng(11);
-    for (int feed = 0; feed < 40; ++feed) {
-        const int n_stops = 30;
-        std::uniform_real_distribution<double> coord(0.0, 0.01);  // about 1.1 km square
-        std::string stops = "stop_id,stop_lat,stop_lon\n";
-        for (int s = 0; s < n_stops; ++s) {
-            stops += "S" + std::to_string(s) + "," + std::to_string(41.9 + coord(rng)) + "," +
-                     std::to_string(-87.6 + coord(rng)) + "\n";
-        }
-        std::string times = "trip_id,arrival_time,departure_time,stop_id,stop_sequence\n";
-        std::uniform_int_distribution<int> stop(0, n_stops - 1), start(8 * 3600, 9 * 3600),
-            hop(30, 600), dwell(0, 60), len(2, 6);
-        const auto hms = [](int t) {
-            char buf[16];
-            std::snprintf(buf, sizeof buf, "%02d:%02d:%02d", t / 3600, t / 60 % 60, t % 60);
-            return std::string(buf);
-        };
-        for (int trip = 0; trip < 60; ++trip) {
-            int t = start(rng);
-            const int n = len(rng);
-            for (int k = 0; k < n; ++k) {
-                const int arr = t;
-                const int dep = arr + (k + 1 < n ? dwell(rng) : 0);
-                times += "T" + std::to_string(trip) + "," + hms(arr) + "," + hms(dep) + ",S" +
-                         std::to_string(stop(rng)) + "," + std::to_string(k + 1) + "\n";
-                t = dep + hop(rng);
+    for (const int32_t transfer : {0, 90, 300}) {
+        for (int feed = 0; feed < 40; ++feed) {
+            Timetable tt = random_feed(rng);
+            tt.set_min_transfer_time(transfer);
+            std::uniform_int_distribution<int> stop(0, tt.num_stops() - 1), start(8 * 3600, 9 * 3600);
+            for (int q = 0; q < 10; ++q) {
+                const int32_t source = stop(rng), t0 = start(rng);
+                CHECK(earliest_arrival(tt, source, t0) == fixpoint_arrival(tt, source, t0));
             }
         }
-        std::istringstream stops_in(stops), times_in(times);
-        Timetable tt = Timetable::from_gtfs(stops_in, times_in);
-        tt.generate_footpaths(300, 1.3);
-        for (int q = 0; q < 10; ++q) {
-            const int32_t source = stop(rng), t0 = start(rng);
-            CHECK(earliest_arrival(tt, source, t0) == fixpoint_arrival(tt, source, t0));
+    }
+}
+
+TEST_CASE("min_transfer_time") {
+    Timetable tt = tiny();
+    const auto at = [&](const std::vector<int32_t>& arr, const char* stop) {
+        return arr[tt.stop_index(stop)];
+    };
+    CHECK(tt.min_transfer_time() == 0);
+    CHECK_THROWS_AS(tt.set_min_transfer_time(-1), std::invalid_argument);
+
+    // T1 reaches B at 08:10 and T2 leaves B at 08:15: a 5-minute connection.
+    tt.set_min_transfer_time(300);
+    auto arr = earliest_arrival(tt, tt.stop_index("A"), parse_gtfs_time("08:00:00"));
+    CHECK(at(arr, "D") == parse_gtfs_time("08:25:00"));  // exactly enough
+    CHECK(at(arr, "C") == parse_gtfs_time("08:20:00"));  // staying on T1 needs no transfer
+
+    tt.set_min_transfer_time(301);
+    arr = earliest_arrival(tt, tt.stop_index("A"), parse_gtfs_time("08:00:00"));
+    CHECK(at(arr, "D") == parse_gtfs_time("08:35:00"));  // misses T2; rides T1 on to C, then T4
+    // T1 (08:20) to T4 (08:30) at C is a 10-minute connection, still fine.
+
+    // The first boarding is never charged: leaving C at 08:30 catches T4.
+    arr = earliest_arrival(tt, tt.stop_index("C"), parse_gtfs_time("08:30:00"));
+    CHECK(at(arr, "D") == parse_gtfs_time("08:35:00"));
+
+    const auto legs = transit::journey(tt, tt.stop_index("A"), parse_gtfs_time("08:00:00"),
+                                       tt.stop_index("D"));
+    REQUIRE(legs.size() == 2);
+    CHECK(tt.trip_ids()[legs[0].trip] == "T1");
+    CHECK(legs[0].to_stop == tt.stop_index("C"));
+    CHECK(tt.trip_ids()[legs[1].trip] == "T4");
+}
+
+// Leaving later never gets you anywhere earlier: whatever a later departure
+// can do, an earlier one can too by waiting (the FIFO property).
+TEST_CASE("leaving later never arrives earlier") {
+    std::mt19937 rng(23);
+    for (int feed = 0; feed < 20; ++feed) {
+        const Timetable tt = random_feed(rng);
+        std::uniform_int_distribution<int> stop(0, tt.num_stops() - 1);
+        for (int q = 0; q < 5; ++q) {
+            const int32_t source = stop(rng);
+            auto prev = earliest_arrival(tt, source, 7 * 3600 + 50 * 60);
+            for (int32_t t0 = 7 * 3600 + 51 * 60; t0 <= 9 * 3600; t0 += 60) {
+                const auto cur = earliest_arrival(tt, source, t0);
+                for (int32_t s = 0; s < tt.num_stops(); ++s) {
+                    // kUnreachable is the largest int32, so it counts as latest.
+                    REQUIRE(prev[s] <= cur[s]);
+                }
+                prev = cur;
+            }
+        }
+
+        // The same holds door to door: departure + travel time never falls.
+        using transit::LatLon;
+        std::vector<LatLon> points;
+        for (int32_t s = 0; s < tt.num_stops(); s += 3) {
+            points.push_back({tt.stop_lats()[s] + 0.0005, tt.stop_lons()[s]});  // ~55 m away
+        }
+        std::vector<int32_t> deps;
+        for (int32_t t0 = 7 * 3600 + 50 * 60; t0 <= 9 * 3600; t0 += 120) deps.push_back(t0);
+        transit::MatrixOptions opt;
+        opt.max_access_m = 300;
+        const auto m = transit::travel_time_matrix(tt, points, points, deps, opt);
+        const size_t n = points.size();
+        for (size_t o = 0; o < n; ++o) {
+            for (size_t d = 0; d < n; ++d) {
+                for (size_t k = 1; k < deps.size(); ++k) {
+                    const auto at = [&](size_t i) {
+                        const int32_t v = m[(o * deps.size() + i) * n + d];
+                        return v == kUnreachable ? int64_t{kUnreachable} : int64_t{deps[i]} + v;
+                    };
+                    REQUIRE(at(k - 1) <= at(k));
+                }
+            }
         }
     }
 }
@@ -532,4 +633,91 @@ TEST_CASE("travel_time_matrix agrees with stop routing and across thread counts"
     // so compare a destination reached by riding: S 09:58 -> R via T + walk.
     CHECK(one[(0 * 2 + 0) * 3 + 2] == parse_gtfs_time("10:10:00") + 112 - deps[0]);
     CHECK(one[(0 * 2 + 0) * 3 + 0] == 0);
+}
+
+TEST_CASE("journey on the tiny feed") {
+    using transit::journey;
+    Timetable tt = tiny();
+    const auto id = [&](const char* stop) { return tt.stop_index(stop); };
+    const auto trip = [&](int32_t t) { return tt.trip_ids()[t]; };
+
+    // A 08:00 -> D: T1 to B, then T2 to D.
+    auto legs = journey(tt, id("A"), parse_gtfs_time("08:00:00"), id("D"));
+    REQUIRE(legs.size() == 2);
+    CHECK(trip(legs[0].trip) == "T1");
+    CHECK(legs[0].from_stop == id("A"));
+    CHECK(legs[0].to_stop == id("B"));
+    CHECK(legs[0].arr_time == parse_gtfs_time("08:10:00"));
+    CHECK(trip(legs[1].trip) == "T2");
+    CHECK(legs[1].dep_time == parse_gtfs_time("08:15:00"));
+    CHECK(legs[1].arr_time == parse_gtfs_time("08:25:00"));
+
+    CHECK(journey(tt, id("A"), parse_gtfs_time("08:00:00"), id("E")).empty());
+    CHECK(journey(tt, id("A"), parse_gtfs_time("08:00:00"), id("A")).empty());
+
+    // With footpaths: ride T1 to B, then walk to D.
+    tt.generate_footpaths(1200, 1.3);
+    legs = journey(tt, id("A"), parse_gtfs_time("08:00:00"), id("D"));
+    REQUIRE(legs.size() == 2);
+    CHECK(trip(legs[0].trip) == "T1");
+    CHECK(legs[1].trip == -1);
+    CHECK(legs[1].from_stop == id("B"));
+    CHECK(legs[1].arr_time == parse_gtfs_time("08:10:00") + 856);
+}
+
+TEST_CASE("journeys are consistent with earliest_arrival on random feeds") {
+    std::mt19937 rng(31);
+    for (int feed = 0; feed < 40; ++feed) {
+        Timetable tt = random_feed(rng);
+        tt.set_min_transfer_time(feed % 2 ? 120 : 0);
+        std::uniform_int_distribution<int> stop(0, tt.num_stops() - 1), start(8 * 3600, 9 * 3600);
+        for (int q = 0; q < 5; ++q) {
+            const int32_t source = stop(rng), t0 = start(rng);
+            const auto arrival = earliest_arrival(tt, source, t0);
+            for (int32_t target = 0; target < tt.num_stops(); ++target) {
+                const auto legs = transit::journey(tt, source, t0, target);
+                if (target == source || arrival[target] == kUnreachable) {
+                    CHECK(legs.empty());
+                    continue;
+                }
+                REQUIRE(!legs.empty());
+                CHECK(legs.front().from_stop == source);
+                CHECK(legs.front().dep_time >= t0);
+                CHECK(legs.back().to_stop == target);
+                CHECK(legs.back().arr_time == arrival[target]);
+                for (size_t i = 0; i < legs.size(); ++i) {
+                    const auto& leg = legs[i];
+                    CHECK(leg.dep_time <= leg.arr_time);
+                    if (i > 0) {
+                        CHECK(legs[i - 1].to_stop == leg.from_stop);
+                        CHECK(legs[i - 1].arr_time <= leg.dep_time);
+                        if (leg.trip >= 0) {  // boarding after a ride, or a walk after a ride
+                            const bool after_vehicle = legs[i - 1].trip >= 0 || i >= 2;
+                            if (after_vehicle) {
+                                CHECK(legs[i - 1].arr_time + tt.min_transfer_time() <= leg.dep_time);
+                            }
+                        }
+                        CHECK(!(legs[i - 1].trip < 0 && leg.trip < 0));  // no chained walks
+                    }
+                    if (leg.trip < 0) {
+                        bool found = false;
+                        for (const auto& f : tt.footpaths(leg.from_stop)) {
+                            found |= f.to == leg.to_stop && f.duration == leg.arr_time - leg.dep_time;
+                        }
+                        CHECK(found);
+                    } else {
+                        // The trip really leaves from_stop at dep_time and reaches to_stop at arr_time.
+                        bool leaves = false, reaches = false;
+                        for (const auto& c : tt.connections()) {
+                            if (c.trip != leg.trip) continue;
+                            leaves |= c.dep_stop == leg.from_stop && c.dep_time == leg.dep_time;
+                            reaches |= c.arr_stop == leg.to_stop && c.arr_time == leg.arr_time;
+                        }
+                        CHECK(leaves);
+                        CHECK(reaches);
+                    }
+                }
+            }
+        }
+    }
 }

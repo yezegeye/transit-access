@@ -71,6 +71,8 @@ public:
 
     // Sorted by departure time.
     const std::vector<Connection>& connections() const { return connections_; }
+    // GTFS trip_id of each Connection::trip index.
+    const std::vector<std::string>& trip_ids() const { return trip_ids_; }
 
     // Replaces the footpaths with a walk between every pair of stops at most
     // `max_distance_m` apart (straight-line haversine distance), taking
@@ -83,6 +85,13 @@ public:
     const std::vector<Footpath>& footpaths(int32_t stop) const { return footpaths_[stop]; }
     size_t num_footpaths() const { return num_footpaths_; }
 
+    // Extra seconds needed to change from one vehicle to another, on top of
+    // any walk between them (finding the platform, stairs, a missed
+    // connection's margin). 0 by default. Not charged when boarding the first
+    // vehicle of a journey. Throws std::invalid_argument if negative.
+    int32_t min_transfer_time() const { return min_transfer_time_; }
+    void set_min_transfer_time(int32_t seconds);
+
 private:
     static Timetable load(std::istream& stops, std::istream& stop_times,
                           const std::unordered_set<std::string>* trips);
@@ -92,8 +101,10 @@ private:
     std::vector<double> stop_lats_;
     std::vector<double> stop_lons_;
     std::vector<Connection> connections_;
+    std::vector<std::string> trip_ids_;
     std::vector<std::vector<Footpath>> footpaths_;  // indexed by stop
     size_t num_footpaths_ = 0;
+    int32_t min_transfer_time_ = 0;
 };
 
 // A way to start a journey: be at `stop` at `time`.
@@ -103,8 +114,9 @@ struct Departure {
 };
 
 // Connection Scan Algorithm: earliest arrival time at every stop when the
-// journey can start from any of `sources`. Transfers between vehicles at the
-// same stop are instantaneous. After each ride the traveller may take one
+// journey can start from any of `sources`. Changing vehicles takes
+// Timetable::min_transfer_time() on top of any walk. After each ride the
+// traveller may take one
 // footpath from Timetable::footpaths() (walks are not chained); sources do not
 // get a walk, since a caller-supplied source is usually already the end of a
 // walk. Connections departing after `latest_departure` are ignored, which
@@ -117,6 +129,24 @@ std::vector<int32_t> earliest_arrival(const Timetable& tt, const std::vector<Dep
 // then ride, walking one footpath after each ride.
 std::vector<int32_t> earliest_arrival(const Timetable& tt, int32_t source,
                                       int32_t departure_time);
+
+// One part of a journey: a ride on one trip, or a walk between stops
+// (trip == -1).
+struct Leg {
+    int32_t from_stop;
+    int32_t to_stop;
+    int32_t dep_time;
+    int32_t arr_time;
+    int32_t trip;
+};
+
+// The legs of one earliest-arrival journey from `source` (leaving at
+// `departure_time`) to `target`, in travel order, following the same rules
+// as earliest_arrival: its last leg arrives at earliest_arrival(...)[target].
+// Empty if the target is the source or unreachable. A ride starts where its
+// trip was first boarded, so it may ride further than strictly needed.
+std::vector<Leg> journey(const Timetable& tt, int32_t source, int32_t departure_time,
+                         int32_t target);
 
 // A WGS84 point in degrees, e.g. a census tract centroid.
 struct LatLon {

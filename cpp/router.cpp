@@ -269,6 +269,11 @@ size_t Timetable::generate_footpaths(double max_distance_m, double walk_speed_mp
     return num_footpaths_;
 }
 
+void Timetable::set_min_transfer_time(int32_t seconds) {
+    if (seconds < 0) throw std::invalid_argument("min_transfer_time must be >= 0");
+    min_transfer_time_ = seconds;
+}
+
 Timetable Timetable::from_gtfs_dir(const std::string& dir) {
     std::ifstream stops = open_gtfs_file(dir, "stops.txt");
     std::ifstream stop_times = open_gtfs_file(dir, "stop_times.txt");
@@ -363,6 +368,9 @@ Timetable Timetable::load(std::istream& stops, std::istream& stop_times,
         }
     }
 
+    tt.trip_ids_.resize(trip_index.size());
+    for (const auto& [id, index] : trip_index) tt.trip_ids_[index] = id;
+
     std::sort(rows.begin(), rows.end(), [](const StopTime& a, const StopTime& b) {
         return std::tie(a.trip, a.sequence) < std::tie(b.trip, b.sequence);
     });
@@ -387,30 +395,40 @@ std::vector<int32_t> earliest_arrival(const Timetable& tt, const std::vector<Dep
     // Earliest arrival at each stop on a vehicle. Walking on is allowed only
     // from these, so a walk is never chained onto another walk.
     std::vector<int32_t> by_vehicle(tt.num_stops(), kUnreachable);
+    // Earliest time a new vehicle can be boarded at each stop: the arrival,
+    // plus the minimum transfer time if the traveller came off another vehicle.
+    std::vector<int32_t> ready(tt.num_stops(), kUnreachable);
     int32_t start = kUnreachable;
     for (const Departure& d : sources) {
         if (d.stop < 0 || d.stop >= tt.num_stops()) {
             throw std::out_of_range("source stop index out of range");
         }
         arrival[d.stop] = std::min(arrival[d.stop], d.time);
+        ready[d.stop] = std::min(ready[d.stop], d.time);
         start = std::min(start, d.time);
     }
     if (sources.empty()) return arrival;
 
+    const int32_t transfer = tt.min_transfer_time();
+    std::vector<char> on_trip(tt.trip_ids().size(), 0);
     const auto& conns = tt.connections();
     auto it = std::lower_bound(conns.begin(), conns.end(), start,
                                [](const Connection& c, int32_t t) { return c.dep_time < t; });
     for (; it != conns.end() && it->dep_time <= latest_departure; ++it) {
-        // Boarding needs us at the stop by departure. A traveller already on
-        // this trip passes the same test: they reached dep_stop at this trip's
-        // arrival there, which is no later than its departure.
-        if (arrival[it->dep_stop] > it->dep_time || it->arr_time >= by_vehicle[it->arr_stop]) {
-            continue;
+        // Staying on a trip needs no transfer; boarding one needs us ready at
+        // the stop by its departure.
+        if (!on_trip[it->trip]) {
+            if (ready[it->dep_stop] > it->dep_time) continue;
+            on_trip[it->trip] = 1;
         }
+        if (it->arr_time >= by_vehicle[it->arr_stop]) continue;
         by_vehicle[it->arr_stop] = it->arr_time;
         arrival[it->arr_stop] = std::min(arrival[it->arr_stop], it->arr_time);
+        ready[it->arr_stop] = std::min(ready[it->arr_stop], it->arr_time + transfer);
         for (const Footpath& walk : tt.footpaths(it->arr_stop)) {
-            arrival[walk.to] = std::min(arrival[walk.to], it->arr_time + walk.duration);
+            const int32_t t = it->arr_time + walk.duration;
+            arrival[walk.to] = std::min(arrival[walk.to], t);
+            ready[walk.to] = std::min(ready[walk.to], t + transfer);
         }
     }
     return arrival;
@@ -426,6 +444,94 @@ std::vector<int32_t> earliest_arrival(const Timetable& tt, int32_t source,
         sources.push_back({walk.to, departure_time + walk.duration});
     }
     return earliest_arrival(tt, sources);
+}
+
+namespace {
+
+// How a stop's current arrival was achieved, for journey().
+struct Pred {
+    enum Kind : int8_t { kNone, kSource, kRide, kWalk } kind = kNone;
+    int32_t conn = -1;  // kRide: last connection ridden; kWalk: connection ridden
+                        // to the walk's start (-1 for a walk from the source)
+    int32_t from = -1;  // kWalk: the stop walked from
+    int32_t time = kUnreachable;  // arrival time this way
+};
+
+}  // namespace
+
+std::vector<Leg> journey(const Timetable& tt, int32_t source, int32_t departure_time,
+                         int32_t target) {
+    if (source < 0 || source >= tt.num_stops() || target < 0 || target >= tt.num_stops()) {
+        throw std::out_of_range("stop index out of range");
+    }
+    const auto& conns = tt.connections();
+    std::vector<int32_t> arrival(tt.num_stops(), kUnreachable), by_vehicle(tt.num_stops(), kUnreachable),
+        ready(tt.num_stops(), kUnreachable);
+    // pred: how the best arrival was reached (for the final leg); ready_pred:
+    // how the earliest boarding time was reached (for transfers). They differ
+    // when a later arrival on foot beats an earlier one that needs a transfer.
+    std::vector<Pred> pred(tt.num_stops()), ready_pred(tt.num_stops());
+    const int32_t transfer = tt.min_transfer_time();
+    const auto reach = [&](int32_t stop, int32_t t, int32_t ready_t, const Pred& p) {
+        if (t < arrival[stop]) {
+            arrival[stop] = t;
+            pred[stop] = p;
+        }
+        if (ready_t < ready[stop]) {
+            ready[stop] = ready_t;
+            ready_pred[stop] = p;
+        }
+    };
+    // Where each trip was first boarded, and how its boarding stop was reached
+    // at that moment (later improvements there cannot change this journey).
+    std::vector<int32_t> enter(tt.trip_ids().size(), -1);
+    std::vector<Pred> enter_pred(tt.trip_ids().size());
+
+    reach(source, departure_time, departure_time, {Pred::kSource, -1, -1, departure_time});
+    for (const Footpath& walk : tt.footpaths(source)) {
+        const int32_t t = departure_time + walk.duration;
+        reach(walk.to, t, t, {Pred::kWalk, -1, source, t});
+    }
+    auto it = std::lower_bound(conns.begin(), conns.end(), departure_time,
+                               [](const Connection& c, int32_t t) { return c.dep_time < t; });
+    for (; it != conns.end(); ++it) {
+        const Connection& c = *it;
+        const auto ci = static_cast<int32_t>(it - conns.begin());
+        if (enter[c.trip] < 0) {
+            if (ready[c.dep_stop] > c.dep_time) continue;
+            enter[c.trip] = ci;
+            enter_pred[c.trip] = ready_pred[c.dep_stop];
+        }
+        if (c.arr_time >= by_vehicle[c.arr_stop]) continue;
+        by_vehicle[c.arr_stop] = c.arr_time;
+        reach(c.arr_stop, c.arr_time, c.arr_time + transfer, {Pred::kRide, ci, -1, c.arr_time});
+        for (const Footpath& walk : tt.footpaths(c.arr_stop)) {
+            const int32_t t = c.arr_time + walk.duration;
+            reach(walk.to, t, t + transfer, {Pred::kWalk, ci, c.arr_stop, t});
+        }
+    }
+
+    std::vector<Leg> legs;
+    if (arrival[target] == kUnreachable || target == source) return legs;
+    int32_t stop = target;
+    Pred p = pred[target];
+    while (p.kind != Pred::kSource) {
+        if (p.kind == Pred::kWalk) {
+            const int32_t start = p.conn < 0 ? departure_time : conns[p.conn].arr_time;
+            legs.push_back({p.from, stop, start, p.time, -1});
+            stop = p.from;
+            if (p.conn < 0) break;  // walked straight from the source
+            p = {Pred::kRide, p.conn, -1, start};
+        } else {
+            const Connection& exit = conns[p.conn];
+            const Connection& board = conns[enter[exit.trip]];
+            legs.push_back({board.dep_stop, exit.arr_stop, board.dep_time, exit.arr_time, exit.trip});
+            stop = board.dep_stop;
+            p = enter_pred[exit.trip];
+        }
+    }
+    std::reverse(legs.begin(), legs.end());
+    return legs;
 }
 
 namespace {

@@ -70,6 +70,9 @@ PYBIND11_MODULE(transit_router, m) {
              "`max_distance_m` apart (straight line), taking distance / walk_speed_mps\n"
              "seconds. Returns the number of footpaths (each direction counts once).")
         .def_property_readonly("num_footpaths", &Timetable::num_footpaths)
+        .def_property("min_transfer_time", &Timetable::min_transfer_time,
+                      &Timetable::set_min_transfer_time,
+                      "Extra seconds needed to change vehicles, on top of any walk (default 0).")
         .def(
             "footpaths",
             [](const Timetable& tt, const std::string& stop_id) {
@@ -139,4 +142,88 @@ PYBIND11_MODULE(transit_router, m) {
         "to the destination; nearby points may also be walked between directly.\n"
         "Waiting for the first vehicle counts. Runs on `threads` threads (0 = all\n"
         "cores) without holding the GIL.");
+
+    m.def(
+        "journey",
+        [](const Timetable& tt, const std::string& source, int32_t departure_time,
+           const std::string& target) {
+            py::list legs;
+            for (const auto& leg : transit::journey(tt, stop_index(tt, source), departure_time,
+                                                    stop_index(tt, target))) {
+                py::dict d;
+                d["mode"] = leg.trip < 0 ? "walk" : "ride";
+                d["from_stop"] = tt.stop_ids()[leg.from_stop];
+                d["to_stop"] = tt.stop_ids()[leg.to_stop];
+                d["departure"] = leg.dep_time;
+                d["arrival"] = leg.arr_time;
+                d["trip_id"] = leg.trip < 0 ? py::object(py::none()) : py::object(py::str(tt.trip_ids()[leg.trip]));
+                legs.append(d);
+            }
+            return legs;
+        },
+        py::arg("timetable"), py::arg("source"), py::arg("departure_time"), py::arg("target"),
+        "The legs of one earliest-arrival journey from `source` to `target` as\n"
+        "dicts (mode 'ride' or 'walk', from_stop, to_stop, departure, arrival,\n"
+        "trip_id); empty if unreachable or target == source.");
+
+    m.attr("UNREACHABLE") = transit::kUnreachable;
+
+    m.def(
+        "arrival_times",
+        [](const Timetable& tt, const std::string& source, int32_t departure_time,
+           const py::object& max_seconds) {
+            const int32_t src = stop_index(tt, source);
+            std::vector<transit::Departure> sources{{src, departure_time}};
+            for (const auto& walk : tt.footpaths(src)) {
+                sources.push_back({walk.to, departure_time + walk.duration});
+            }
+            int64_t limit = transit::kUnreachable;
+            if (!max_seconds.is_none()) {
+                limit = std::min<int64_t>(int64_t{departure_time} + max_seconds.cast<int32_t>(),
+                                          transit::kUnreachable);
+            }
+            std::vector<int32_t> arrival;
+            {
+                py::gil_scoped_release release;
+                arrival = transit::earliest_arrival(tt, sources, static_cast<int32_t>(limit));
+            }
+            py::array_t<int32_t> out(arrival.size());
+            int32_t* o = out.mutable_data();
+            for (size_t i = 0; i < arrival.size(); ++i) {
+                o[i] = arrival[i] > limit ? transit::kUnreachable : arrival[i];
+            }
+            return out;
+        },
+        py::arg("timetable"), py::arg("source"), py::arg("departure_time"),
+        py::arg("max_seconds") = py::none(),
+        "Earliest arrival (seconds after midnight) at every stop, indexed like\n"
+        "Timetable.stop_ids, leaving `source` at `departure_time`. Stops not\n"
+        "reached within `max_seconds` (if given) are UNREACHABLE.");
+
+    m.def(
+        "connection_arrays",
+        [](const Timetable& tt) {
+            const auto& conns = tt.connections();
+            py::array_t<int32_t> dep_stop(conns.size()), arr_stop(conns.size()), dep_time(conns.size()),
+                arr_time(conns.size()), trip(conns.size());
+            auto a = dep_stop.mutable_data(), b = arr_stop.mutable_data(), c = dep_time.mutable_data(),
+                 d = arr_time.mutable_data(), e = trip.mutable_data();
+            for (size_t i = 0; i < conns.size(); ++i) {
+                a[i] = conns[i].dep_stop;
+                b[i] = conns[i].arr_stop;
+                c[i] = conns[i].dep_time;
+                d[i] = conns[i].arr_time;
+                e[i] = conns[i].trip;
+            }
+            py::dict out;
+            out["dep_stop"] = dep_stop;
+            out["arr_stop"] = arr_stop;
+            out["dep_time"] = dep_time;
+            out["arr_time"] = arr_time;
+            out["trip"] = trip;
+            return out;
+        },
+        py::arg("timetable"),
+        "The timetable's connections, sorted by departure, as NumPy arrays\n"
+        "(dep_stop, arr_stop, dep_time, arr_time, trip; stops and trips as indices).");
 }

@@ -129,3 +129,37 @@ def test_travel_time_matrix_errors(tt):
     with pytest.raises(ValueError):
         tr.travel_time_matrix(tt, [(0.0, 0.0)], [(0.0, 0.0)], [0], walk_speed_mps=0)
     assert tr.travel_time_matrix(tt, np.empty((0, 2)), [(0.0, 0.0)], [0]).shape == (0, 1, 1)
+
+
+def test_journey(tt):
+    legs = tr.journey(tt, "A", t("08:00:00"), "D")
+    assert [(leg["mode"], leg["trip_id"], leg["from_stop"], leg["to_stop"]) for leg in legs] == [
+        ("ride", "T1", "A", "B"),
+        ("ride", "T2", "B", "D"),
+    ]
+    assert legs[-1]["arrival"] == t("08:25:00")
+    assert tr.journey(tt, "A", t("08:00:00"), "E") == []
+
+
+def test_min_transfer_time():
+    tt = tr.Timetable.from_gtfs_dir(TINY)
+    assert tt.min_transfer_time == 0
+    tt.min_transfer_time = 301  # T1 -> T2 at B is a 5-minute connection
+    assert tr.earliest_arrival(tt, "A", t("08:00:00"))["D"] == t("08:35:00")
+    with pytest.raises(ValueError):
+        tt.min_transfer_time = -1
+
+
+def test_arrival_times(tt):
+    arr = tr.arrival_times(tt, "A", t("08:00:00"))
+    assert arr.dtype == np.int32 and arr.shape == (5,)
+    assert arr.tolist() == [t("08:00:00"), t("08:10:00"), t("08:20:00"), t("08:25:00"), tr.UNREACHABLE]
+    capped = tr.arrival_times(tt, "A", t("08:00:00"), max_seconds=20 * 60)
+    assert capped.tolist()[3] == tr.UNREACHABLE  # D at 08:25 is beyond 20 minutes
+    assert capped.tolist()[2] == t("08:20:00")
+
+
+def test_connection_arrays(tt):
+    c = tr.connection_arrays(tt)
+    assert len(c["dep_time"]) == tt.num_connections == 5
+    assert (np.diff(c["dep_time"]) >= 0).all()
