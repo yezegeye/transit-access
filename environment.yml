@@ -6,6 +6,7 @@ dependencies:
   - pybind11
   - numpy
   - pandas
+  - scipy
   - geopandas
   - matplotlib
   - pytest
