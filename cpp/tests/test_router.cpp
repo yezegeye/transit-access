@@ -587,3 +587,83 @@ TEST_CASE("travel_time_matrix agrees with stop routing and across thread counts"
     CHECK(one[(0 * 2 + 0) * 3 + 2] == parse_gtfs_time("10:10:00") + 112 - deps[0]);
     CHECK(one[(0 * 2 + 0) * 3 + 0] == 0);
 }
+
+TEST_CASE("journey on the tiny feed") {
+    using transit::journey;
+    Timetable tt = tiny();
+    const auto id = [&](const char* stop) { return tt.stop_index(stop); };
+    const auto trip = [&](int32_t t) { return tt.trip_ids()[t]; };
+
+    // A 08:00 -> D: T1 to B, then T2 to D.
+    auto legs = journey(tt, id("A"), parse_gtfs_time("08:00:00"), id("D"));
+    REQUIRE(legs.size() == 2);
+    CHECK(trip(legs[0].trip) == "T1");
+    CHECK(legs[0].from_stop == id("A"));
+    CHECK(legs[0].to_stop == id("B"));
+    CHECK(legs[0].arr_time == parse_gtfs_time("08:10:00"));
+    CHECK(trip(legs[1].trip) == "T2");
+    CHECK(legs[1].dep_time == parse_gtfs_time("08:15:00"));
+    CHECK(legs[1].arr_time == parse_gtfs_time("08:25:00"));
+
+    CHECK(journey(tt, id("A"), parse_gtfs_time("08:00:00"), id("E")).empty());
+    CHECK(journey(tt, id("A"), parse_gtfs_time("08:00:00"), id("A")).empty());
+
+    // With footpaths: ride T1 to B, then walk to D.
+    tt.generate_footpaths(1200, 1.3);
+    legs = journey(tt, id("A"), parse_gtfs_time("08:00:00"), id("D"));
+    REQUIRE(legs.size() == 2);
+    CHECK(trip(legs[0].trip) == "T1");
+    CHECK(legs[1].trip == -1);
+    CHECK(legs[1].from_stop == id("B"));
+    CHECK(legs[1].arr_time == parse_gtfs_time("08:10:00") + 856);
+}
+
+TEST_CASE("journeys are consistent with earliest_arrival on random feeds") {
+    std::mt19937 rng(31);
+    for (int feed = 0; feed < 20; ++feed) {
+        const Timetable tt = random_feed(rng);
+        std::uniform_int_distribution<int> stop(0, tt.num_stops() - 1), start(8 * 3600, 9 * 3600);
+        for (int q = 0; q < 5; ++q) {
+            const int32_t source = stop(rng), t0 = start(rng);
+            const auto arrival = earliest_arrival(tt, source, t0);
+            for (int32_t target = 0; target < tt.num_stops(); ++target) {
+                const auto legs = transit::journey(tt, source, t0, target);
+                if (target == source || arrival[target] == kUnreachable) {
+                    CHECK(legs.empty());
+                    continue;
+                }
+                REQUIRE(!legs.empty());
+                CHECK(legs.front().from_stop == source);
+                CHECK(legs.front().dep_time >= t0);
+                CHECK(legs.back().to_stop == target);
+                CHECK(legs.back().arr_time == arrival[target]);
+                for (size_t i = 0; i < legs.size(); ++i) {
+                    const auto& leg = legs[i];
+                    CHECK(leg.dep_time <= leg.arr_time);
+                    if (i > 0) {
+                        CHECK(legs[i - 1].to_stop == leg.from_stop);
+                        CHECK(legs[i - 1].arr_time <= leg.dep_time);
+                        CHECK(!(legs[i - 1].trip < 0 && leg.trip < 0));  // no chained walks
+                    }
+                    if (leg.trip < 0) {
+                        bool found = false;
+                        for (const auto& f : tt.footpaths(leg.from_stop)) {
+                            found |= f.to == leg.to_stop && f.duration == leg.arr_time - leg.dep_time;
+                        }
+                        CHECK(found);
+                    } else {
+                        // The trip really leaves from_stop at dep_time and reaches to_stop at arr_time.
+                        bool leaves = false, reaches = false;
+                        for (const auto& c : tt.connections()) {
+                            if (c.trip != leg.trip) continue;
+                            leaves |= c.dep_stop == leg.from_stop && c.dep_time == leg.dep_time;
+                            reaches |= c.arr_stop == leg.to_stop && c.arr_time == leg.arr_time;
+                        }
+                        CHECK(leaves);
+                        CHECK(reaches);
+                    }
+                }
+            }
+        }
+    }
+}

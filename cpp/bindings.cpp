@@ -139,4 +139,27 @@ PYBIND11_MODULE(transit_router, m) {
         "to the destination; nearby points may also be walked between directly.\n"
         "Waiting for the first vehicle counts. Runs on `threads` threads (0 = all\n"
         "cores) without holding the GIL.");
+
+    m.def(
+        "journey",
+        [](const Timetable& tt, const std::string& source, int32_t departure_time,
+           const std::string& target) {
+            py::list legs;
+            for (const auto& leg : transit::journey(tt, stop_index(tt, source), departure_time,
+                                                    stop_index(tt, target))) {
+                py::dict d;
+                d["mode"] = leg.trip < 0 ? "walk" : "ride";
+                d["from_stop"] = tt.stop_ids()[leg.from_stop];
+                d["to_stop"] = tt.stop_ids()[leg.to_stop];
+                d["departure"] = leg.dep_time;
+                d["arrival"] = leg.arr_time;
+                d["trip_id"] = leg.trip < 0 ? py::object(py::none()) : py::object(py::str(tt.trip_ids()[leg.trip]));
+                legs.append(d);
+            }
+            return legs;
+        },
+        py::arg("timetable"), py::arg("source"), py::arg("departure_time"), py::arg("target"),
+        "The legs of one earliest-arrival journey from `source` to `target` as\n"
+        "dicts (mode 'ride' or 'walk', from_stop, to_stop, departure, arrival,\n"
+        "trip_id); empty if unreachable or target == source.");
 }

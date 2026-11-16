@@ -129,3 +129,13 @@ def test_travel_time_matrix_errors(tt):
     with pytest.raises(ValueError):
         tr.travel_time_matrix(tt, [(0.0, 0.0)], [(0.0, 0.0)], [0], walk_speed_mps=0)
     assert tr.travel_time_matrix(tt, np.empty((0, 2)), [(0.0, 0.0)], [0]).shape == (0, 1, 1)
+
+
+def test_journey(tt):
+    legs = tr.journey(tt, "A", t("08:00:00"), "D")
+    assert [(leg["mode"], leg["trip_id"], leg["from_stop"], leg["to_stop"]) for leg in legs] == [
+        ("ride", "T1", "A", "B"),
+        ("ride", "T2", "B", "D"),
+    ]
+    assert legs[-1]["arrival"] == t("08:25:00")
+    assert tr.journey(tt, "A", t("08:00:00"), "E") == []

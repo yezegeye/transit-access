@@ -363,6 +363,9 @@ Timetable Timetable::load(std::istream& stops, std::istream& stop_times,
         }
     }
 
+    tt.trip_ids_.resize(trip_index.size());
+    for (const auto& [id, index] : trip_index) tt.trip_ids_[index] = id;
+
     std::sort(rows.begin(), rows.end(), [](const StopTime& a, const StopTime& b) {
         return std::tie(a.trip, a.sequence) < std::tie(b.trip, b.sequence);
     });
@@ -426,6 +429,87 @@ std::vector<int32_t> earliest_arrival(const Timetable& tt, int32_t source,
         sources.push_back({walk.to, departure_time + walk.duration});
     }
     return earliest_arrival(tt, sources);
+}
+
+namespace {
+
+// How a stop's current arrival was achieved, for journey().
+struct Pred {
+    enum Kind : int8_t { kNone, kSource, kRide, kWalk } kind = kNone;
+    int32_t conn = -1;  // kRide: last connection ridden; kWalk: connection ridden
+                        // to the walk's start (-1 for a walk from the source)
+    int32_t from = -1;  // kWalk: the stop walked from
+    int32_t time = kUnreachable;  // arrival time this way
+};
+
+}  // namespace
+
+std::vector<Leg> journey(const Timetable& tt, int32_t source, int32_t departure_time,
+                         int32_t target) {
+    if (source < 0 || source >= tt.num_stops() || target < 0 || target >= tt.num_stops()) {
+        throw std::out_of_range("stop index out of range");
+    }
+    const auto& conns = tt.connections();
+    std::vector<int32_t> arrival(tt.num_stops(), kUnreachable), by_vehicle(tt.num_stops(), kUnreachable);
+    std::vector<Pred> pred(tt.num_stops());
+    // Where each trip was first boarded, and how its boarding stop was reached
+    // at that moment (later improvements there cannot change this journey).
+    std::vector<int32_t> enter(tt.trip_ids().size(), -1);
+    std::vector<Pred> enter_pred(tt.trip_ids().size());
+
+    arrival[source] = departure_time;
+    pred[source] = {Pred::kSource, -1, -1, departure_time};
+    for (const Footpath& walk : tt.footpaths(source)) {
+        if (departure_time + walk.duration < arrival[walk.to]) {
+            arrival[walk.to] = departure_time + walk.duration;
+            pred[walk.to] = {Pred::kWalk, -1, source, arrival[walk.to]};
+        }
+    }
+    auto it = std::lower_bound(conns.begin(), conns.end(), departure_time,
+                               [](const Connection& c, int32_t t) { return c.dep_time < t; });
+    for (; it != conns.end(); ++it) {
+        const Connection& c = *it;
+        const auto ci = static_cast<int32_t>(it - conns.begin());
+        if (enter[c.trip] < 0) {
+            if (arrival[c.dep_stop] > c.dep_time) continue;
+            enter[c.trip] = ci;
+            enter_pred[c.trip] = pred[c.dep_stop];
+        }
+        if (c.arr_time >= by_vehicle[c.arr_stop]) continue;
+        by_vehicle[c.arr_stop] = c.arr_time;
+        if (c.arr_time < arrival[c.arr_stop]) {
+            arrival[c.arr_stop] = c.arr_time;
+            pred[c.arr_stop] = {Pred::kRide, ci, -1, c.arr_time};
+        }
+        for (const Footpath& walk : tt.footpaths(c.arr_stop)) {
+            if (c.arr_time + walk.duration < arrival[walk.to]) {
+                arrival[walk.to] = c.arr_time + walk.duration;
+                pred[walk.to] = {Pred::kWalk, ci, c.arr_stop, arrival[walk.to]};
+            }
+        }
+    }
+
+    std::vector<Leg> legs;
+    if (arrival[target] == kUnreachable || target == source) return legs;
+    int32_t stop = target;
+    Pred p = pred[target];
+    while (p.kind != Pred::kSource) {
+        if (p.kind == Pred::kWalk) {
+            const int32_t start = p.conn < 0 ? departure_time : conns[p.conn].arr_time;
+            legs.push_back({p.from, stop, start, p.time, -1});
+            stop = p.from;
+            if (p.conn < 0) break;  // walked straight from the source
+            p = {Pred::kRide, p.conn, -1, start};
+        } else {
+            const Connection& exit = conns[p.conn];
+            const Connection& board = conns[enter[exit.trip]];
+            legs.push_back({board.dep_stop, exit.arr_stop, board.dep_time, exit.arr_time, exit.trip});
+            stop = board.dep_stop;
+            p = enter_pred[exit.trip];
+        }
+    }
+    std::reverse(legs.begin(), legs.end());
+    return legs;
 }
 
 namespace {
