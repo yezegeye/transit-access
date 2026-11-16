@@ -70,6 +70,9 @@ PYBIND11_MODULE(transit_router, m) {
              "`max_distance_m` apart (straight line), taking distance / walk_speed_mps\n"
              "seconds. Returns the number of footpaths (each direction counts once).")
         .def_property_readonly("num_footpaths", &Timetable::num_footpaths)
+        .def_property("min_transfer_time", &Timetable::min_transfer_time,
+                      &Timetable::set_min_transfer_time,
+                      "Extra seconds needed to change vehicles, on top of any walk (default 0).")
         .def(
             "footpaths",
             [](const Timetable& tt, const std::string& stop_id) {

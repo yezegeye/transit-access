@@ -383,23 +383,36 @@ TEST_CASE("loading a service day keeps only the trips running that day") {
     }
 }
 
-// Reference answer by repeated relaxation in arbitrary order until nothing
-// changes. It shares the one-walk-per-ride rule but not the scan's reliance on
-// processing connections in departure order.
+// Reference answer by repeated relaxation until nothing changes, sweeping
+// trips in an arbitrary order (each trip's own hops in sequence). It shares
+// the routing rules (one walk per ride, min_transfer_time to change vehicles)
+// but not the scan's reliance on processing connections in departure order.
 static std::vector<int32_t> fixpoint_arrival(const Timetable& tt, int32_t source, int32_t t0) {
-    std::vector<int32_t> arrival(tt.num_stops(), kUnreachable), ride(tt.num_stops(), kUnreachable);
-    arrival[source] = t0;
-    for (const auto& w : tt.footpaths(source)) arrival[w.to] = std::min(arrival[w.to], t0 + w.duration);
+    const int32_t n = tt.num_stops(), transfer = tt.min_transfer_time();
+    std::vector<int32_t> arrival(n, kUnreachable), ride(n, kUnreachable), ready(n, kUnreachable);
+    const auto reach = [&](int32_t s, int32_t t, int32_t r) {
+        arrival[s] = std::min(arrival[s], t);
+        ready[s] = std::min(ready[s], r);
+    };
+    reach(source, t0, t0);
+    for (const auto& w : tt.footpaths(source)) reach(w.to, t0 + w.duration, t0 + w.duration);
+
+    std::vector<std::vector<transit::Connection>> trips(tt.trip_ids().size());
+    for (const auto& c : tt.connections()) trips[c.trip].push_back(c);  // stays in trip order
     for (bool changed = true; changed;) {
         changed = false;
-        for (auto c = tt.connections().rbegin(); c != tt.connections().rend(); ++c) {
-            if (c->dep_time < t0 || arrival[c->dep_stop] > c->dep_time || c->arr_time >= ride[c->arr_stop]) continue;
-            ride[c->arr_stop] = c->arr_time;
-            arrival[c->arr_stop] = std::min(arrival[c->arr_stop], c->arr_time);
-            for (const auto& w : tt.footpaths(c->arr_stop)) {
-                arrival[w.to] = std::min(arrival[w.to], c->arr_time + w.duration);
+        for (auto trip = trips.rbegin(); trip != trips.rend(); ++trip) {
+            bool on = false;
+            for (const auto& c : *trip) {
+                on = on || (c.dep_time >= t0 && ready[c.dep_stop] <= c.dep_time);
+                if (!on || c.arr_time >= ride[c.arr_stop]) continue;
+                ride[c.arr_stop] = c.arr_time;
+                reach(c.arr_stop, c.arr_time, c.arr_time + transfer);
+                for (const auto& w : tt.footpaths(c.arr_stop)) {
+                    reach(w.to, c.arr_time + w.duration, c.arr_time + w.duration + transfer);
+                }
+                changed = true;
             }
-            changed = true;
         }
     }
     return arrival;
@@ -442,14 +455,48 @@ static Timetable random_feed(std::mt19937& rng) {
 
 TEST_CASE("scan matches a fixpoint reference on random feeds") {
     std::mt19937 rng(11);
-    for (int feed = 0; feed < 40; ++feed) {
-        const Timetable tt = random_feed(rng);
-        std::uniform_int_distribution<int> stop(0, tt.num_stops() - 1), start(8 * 3600, 9 * 3600);
-        for (int q = 0; q < 10; ++q) {
-            const int32_t source = stop(rng), t0 = start(rng);
-            CHECK(earliest_arrival(tt, source, t0) == fixpoint_arrival(tt, source, t0));
+    for (const int32_t transfer : {0, 90, 300}) {
+        for (int feed = 0; feed < 40; ++feed) {
+            Timetable tt = random_feed(rng);
+            tt.set_min_transfer_time(transfer);
+            std::uniform_int_distribution<int> stop(0, tt.num_stops() - 1), start(8 * 3600, 9 * 3600);
+            for (int q = 0; q < 10; ++q) {
+                const int32_t source = stop(rng), t0 = start(rng);
+                CHECK(earliest_arrival(tt, source, t0) == fixpoint_arrival(tt, source, t0));
+            }
         }
     }
+}
+
+TEST_CASE("min_transfer_time") {
+    Timetable tt = tiny();
+    const auto at = [&](const std::vector<int32_t>& arr, const char* stop) {
+        return arr[tt.stop_index(stop)];
+    };
+    CHECK(tt.min_transfer_time() == 0);
+    CHECK_THROWS_AS(tt.set_min_transfer_time(-1), std::invalid_argument);
+
+    // T1 reaches B at 08:10 and T2 leaves B at 08:15: a 5-minute connection.
+    tt.set_min_transfer_time(300);
+    auto arr = earliest_arrival(tt, tt.stop_index("A"), parse_gtfs_time("08:00:00"));
+    CHECK(at(arr, "D") == parse_gtfs_time("08:25:00"));  // exactly enough
+    CHECK(at(arr, "C") == parse_gtfs_time("08:20:00"));  // staying on T1 needs no transfer
+
+    tt.set_min_transfer_time(301);
+    arr = earliest_arrival(tt, tt.stop_index("A"), parse_gtfs_time("08:00:00"));
+    CHECK(at(arr, "D") == parse_gtfs_time("08:35:00"));  // misses T2; rides T1 on to C, then T4
+    // T1 (08:20) to T4 (08:30) at C is a 10-minute connection, still fine.
+
+    // The first boarding is never charged: leaving C at 08:30 catches T4.
+    arr = earliest_arrival(tt, tt.stop_index("C"), parse_gtfs_time("08:30:00"));
+    CHECK(at(arr, "D") == parse_gtfs_time("08:35:00"));
+
+    const auto legs = transit::journey(tt, tt.stop_index("A"), parse_gtfs_time("08:00:00"),
+                                       tt.stop_index("D"));
+    REQUIRE(legs.size() == 2);
+    CHECK(tt.trip_ids()[legs[0].trip] == "T1");
+    CHECK(legs[0].to_stop == tt.stop_index("C"));
+    CHECK(tt.trip_ids()[legs[1].trip] == "T4");
 }
 
 // Leaving later never gets you anywhere earlier: whatever a later departure
@@ -620,8 +667,9 @@ TEST_CASE("journey on the tiny feed") {
 
 TEST_CASE("journeys are consistent with earliest_arrival on random feeds") {
     std::mt19937 rng(31);
-    for (int feed = 0; feed < 20; ++feed) {
-        const Timetable tt = random_feed(rng);
+    for (int feed = 0; feed < 40; ++feed) {
+        Timetable tt = random_feed(rng);
+        tt.set_min_transfer_time(feed % 2 ? 120 : 0);
         std::uniform_int_distribution<int> stop(0, tt.num_stops() - 1), start(8 * 3600, 9 * 3600);
         for (int q = 0; q < 5; ++q) {
             const int32_t source = stop(rng), t0 = start(rng);
@@ -643,6 +691,12 @@ TEST_CASE("journeys are consistent with earliest_arrival on random feeds") {
                     if (i > 0) {
                         CHECK(legs[i - 1].to_stop == leg.from_stop);
                         CHECK(legs[i - 1].arr_time <= leg.dep_time);
+                        if (leg.trip >= 0) {  // boarding after a ride, or a walk after a ride
+                            const bool after_vehicle = legs[i - 1].trip >= 0 || i >= 2;
+                            if (after_vehicle) {
+                                CHECK(legs[i - 1].arr_time + tt.min_transfer_time() <= leg.dep_time);
+                            }
+                        }
                         CHECK(!(legs[i - 1].trip < 0 && leg.trip < 0));  // no chained walks
                     }
                     if (leg.trip < 0) {

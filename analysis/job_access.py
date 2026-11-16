@@ -43,6 +43,7 @@ class Scenario:
     access_walk_m: float = 800.0  # longest walk from home / to work, straight line
     walk_kmh: float = 5.0  # walking pace along streets
     walk_detour: float = 1.2  # street distance / straight-line distance
+    min_transfer_s: int = 0  # extra time to change vehicles, on top of any walk
     thresholds_min: tuple[int, ...] = (30, 45, 60)
 
     @property
@@ -97,6 +98,7 @@ def compute(tracts: pd.DataFrame, scenario: Scenario) -> tuple[pd.DataFrame, np.
     tr = import_router()
     tt = tr.Timetable.from_gtfs_dir(GTFS_DIR, date=scenario.service_date)
     tt.generate_footpaths(scenario.transfer_walk_m, scenario.walk_speed_mps)
+    tt.min_transfer_time = scenario.min_transfer_s
 
     tracts = tracts.dropna(subset=["lat", "lon"])
     origins = tracts[tracts["in_chicago"]].reset_index(drop=True)

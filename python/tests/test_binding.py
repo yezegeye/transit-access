@@ -139,3 +139,12 @@ def test_journey(tt):
     ]
     assert legs[-1]["arrival"] == t("08:25:00")
     assert tr.journey(tt, "A", t("08:00:00"), "E") == []
+
+
+def test_min_transfer_time():
+    tt = tr.Timetable.from_gtfs_dir(TINY)
+    assert tt.min_transfer_time == 0
+    tt.min_transfer_time = 301  # T1 -> T2 at B is a 5-minute connection
+    assert tr.earliest_arrival(tt, "A", t("08:00:00"))["D"] == t("08:35:00")
+    with pytest.raises(ValueError):
+        tt.min_transfer_time = -1

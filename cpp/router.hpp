@@ -85,6 +85,13 @@ public:
     const std::vector<Footpath>& footpaths(int32_t stop) const { return footpaths_[stop]; }
     size_t num_footpaths() const { return num_footpaths_; }
 
+    // Extra seconds needed to change from one vehicle to another, on top of
+    // any walk between them (finding the platform, stairs, a missed
+    // connection's margin). 0 by default. Not charged when boarding the first
+    // vehicle of a journey. Throws std::invalid_argument if negative.
+    int32_t min_transfer_time() const { return min_transfer_time_; }
+    void set_min_transfer_time(int32_t seconds);
+
 private:
     static Timetable load(std::istream& stops, std::istream& stop_times,
                           const std::unordered_set<std::string>* trips);
@@ -97,6 +104,7 @@ private:
     std::vector<std::string> trip_ids_;
     std::vector<std::vector<Footpath>> footpaths_;  // indexed by stop
     size_t num_footpaths_ = 0;
+    int32_t min_transfer_time_ = 0;
 };
 
 // A way to start a journey: be at `stop` at `time`.
@@ -106,8 +114,9 @@ struct Departure {
 };
 
 // Connection Scan Algorithm: earliest arrival time at every stop when the
-// journey can start from any of `sources`. Transfers between vehicles at the
-// same stop are instantaneous. After each ride the traveller may take one
+// journey can start from any of `sources`. Changing vehicles takes
+// Timetable::min_transfer_time() on top of any walk. After each ride the
+// traveller may take one
 // footpath from Timetable::footpaths() (walks are not chained); sources do not
 // get a walk, since a caller-supplied source is usually already the end of a
 // walk. Connections departing after `latest_departure` are ignored, which
