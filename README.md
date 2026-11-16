@@ -53,8 +53,13 @@ The router is complete for the accessibility analysis.
 
 1. ~~Data prep~~ (done, see [Analysis data](#analysis-data)).
 2. ~~Job access per tract~~ (done, see [Job access](#job-access)).
-3. Income regression: how access relates to tract median household income.
-4. Maps of access by tract.
+3. ~~Access by income~~ (done, see [Access and income](#access-and-income)).
+4. ~~Maps of access by tract~~ (done).
+
+Still to do: hand-check trips against the CTA trip planner, a test that
+leaving later never arrives earlier, a C++ vs. Python benchmark, one
+profiling pass, `docs/decisions.md` and a single command that rebuilds
+every result.
 
 ## Analysis data
 
@@ -107,6 +112,46 @@ suburban job centers are under-counted as destinations.
 
 ![Jobs reachable by transit from each Chicago tract](results/job_access_map.png)
 
+## Access and income
+
+`python analysis/equity.py` splits the 774 Chicago tracts with an ACS income
+estimate into four equal-sized quartiles of median household income and
+compares their transit job access. It writes `results/access.csv` (per
+tract), `results/equity.csv` (per quartile) and the two figures below.
+
+| Income quartile | Median income | Mean jobs within 30 min | 45 min | 60 min | Households without a car |
+|---|---|---|---|---|---|
+| Q1 (lowest) | $13.6K-51.0K | 111,724 | 584,859 | 1,051,197 | 36% |
+| Q2 | $51.0K-72.6K | 89,367 | 510,392 | 1,019,173 | 25% |
+| Q3 | $72.9K-101.0K | 151,949 | 610,108 | 1,044,351 | 22% |
+| Q4 (highest) | $101.1K-250K+ | 402,643 | 872,536 | 1,198,027 | 25% |
+| **Q4 / Q1** | | **3.6x** | **1.5x** | **1.1x** | |
+
+Spearman rank correlation between income and jobs reachable: 0.36 (30 min),
+0.35 (45 min), 0.43 (60 min).
+
+What this shows:
+
+- Tracts in the highest income quartile reach 1.5 times as many jobs within
+  45 minutes as the lowest, and 3.6 times as many within 30. The gap narrows
+  with longer trips: within an hour, most of the city reaches the Loop.
+- Access does not fall steadily with income. The lowest quartile does better
+  than the second: more of its tracts sit close to the Loop, on the Near
+  West and Near South Sides (22% within 8 km of the Loop, against 17% of the
+  second quartile). The highest quartile is the closest by far (median
+  7.3 km, against 11-12 km for the others), mostly on the North Side.
+- At 45 minutes tracts split into two groups, those that reach the Loop
+  (over 500K jobs) and those that do not (under about 300K): for most
+  tracts, the time to downtown decides the score.
+
+What it does not show: why the gap exists, whether residents actually work
+at the reachable jobs (LODES counts jobs where they are, regardless of skill
+or wage match), or access by car, Metra or Pace. The lowest quartile also
+has the most car-free households (36%), so it depends on transit most.
+
+![Jobs reachable by income quartile](results/access_by_quartile.png)
+![Job access against income](results/access_vs_income.png)
+
 ## Layout
 
 - `cpp/` — routing core (static library `router`: `router.*` for GTFS loading
@@ -115,8 +160,8 @@ suburban job centers are under-counted as destinations.
 - `cpp/tests/` — Catch2 unit tests
 - `python/tests/` — pytest tests against the compiled module
 - `analysis/` — Python analysis scripts (`prep_data.py`, `job_access.py`,
-  `plot_job_access.py`) and their tests
-- `results/` — figures
+  `plot_job_access.py`, `equity.py`) and their tests
+- `results/` — figures and result tables (`access.csv`, `equity.csv`)
 - `data/fixtures/` — small hand-made GTFS feeds used by the tests
 - `data/raw/` — downloaded GTFS feeds and census files (git-ignored)
 - `data/processed/` — outputs of `analysis/prep_data.py` (git-ignored, rebuilt by the script)
