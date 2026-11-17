@@ -9,10 +9,12 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Oswald:wght@500;600&family=Libre+Franklin:wght@400;600;800&display=swap">
 <style>
-/* Layout: a civic map tool under a Chicago-flag masthead. Map and tract sheet side by side, findings below; one column on phones. */
+/* One light theme on purpose, whatever the viewer's system setting.
+   Layout: a civic map tool under a Chicago-flag masthead. Map and tract sheet side by side, findings below; one column on phones. */
 :root {
   color-scheme: light;
-  --bg: #ffffff;
+  --bg: #f5f8fb;           /* page: a faint blue-white */
+  --paper: #ffffff;        /* the flag's white band, controls, tooltips */
   --ink: #10202f;
   --muted: #4d5b69;
   --rule: #d3dde6;
@@ -20,31 +22,13 @@
   --red: #e4002b;          /* flag red: stars and the selected tract */
   --press: #0b3a55;        /* pressed controls */
   --press-ink: #ffffff;
-  --none: #edf1f4;         /* out of reach */
+  --none: #dde4ea;         /* out of reach: a step darker than the page so the city outline stays visible */
   /* flag-blue scale, less -> more */
   --s1: #e3f4fb; --s2: #b4e1f4; --s3: #7ccbec; --s4: #41b6e6; --s5: #1f8fc0; --s6: #0b4a6b;
   --q1: #41b6e6; --q2: #1f8fc0; --q3: #146b94; --q4: #0b3a55;
   --dot: #1f8fc0;
   --display: "Oswald", "Arial Narrow", "Helvetica Neue", sans-serif;
   --body: "Libre Franklin", "Franklin Gothic Medium", "Helvetica Neue", Arial, sans-serif;
-}
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) {
-    color-scheme: dark;
-    --bg: #0a1520; --ink: #e6f0f6; --muted: #94a6b6; --rule: #22384a;
-    --sky: #41b6e6; --red: #ff4d6a; --press: #41b6e6; --press-ink: #0a1520; --none: #13212e;
-    --s1: #12324a; --s2: #145a80; --s3: #1f8fc0; --s4: #41b6e6; --s5: #86d0ef; --s6: #c9ecfa;
-    --q1: #145a80; --q2: #1f8fc0; --q3: #41b6e6; --q4: #a9def4;
-    --dot: #41b6e6;
-  }
-}
-:root[data-theme="dark"] {
-  color-scheme: dark;
-  --bg: #0a1520; --ink: #e6f0f6; --muted: #94a6b6; --rule: #22384a;
-  --sky: #41b6e6; --red: #ff4d6a; --press: #41b6e6; --press-ink: #0a1520; --none: #13212e;
-  --s1: #12324a; --s2: #145a80; --s3: #1f8fc0; --s4: #41b6e6; --s5: #86d0ef; --s6: #c9ecfa;
-  --q1: #145a80; --q2: #1f8fc0; --q3: #41b6e6; --q4: #a9def4;
-  --dot: #41b6e6;
 }
 * { box-sizing: border-box; }
 html, body { margin: 0; }
@@ -61,7 +45,7 @@ body {
 /* masthead: the flag's two blue stripes with the four red stars between them */
 .flag { display: grid; grid-template-rows: 14px auto 14px; }
 .flag .stripe { background: var(--sky); }
-.flag .band { padding-block: 14px; }
+.flag .band { padding-block: 14px; background: var(--paper); }
 .masthead { display: flex; align-items: center; gap: 18px; flex-wrap: wrap; }
 .stars { display: flex; gap: 6px; flex: none; }
 .stars svg { width: 26px; height: 26px; display: block; }
@@ -77,13 +61,13 @@ p { margin: 0; }
 .intro { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr); gap: 20px 36px; padding-block: 20px 6px; align-items: start; }
 @media (max-width: 860px) { .intro { grid-template-columns: 1fr; } }
 .lede { font-size: 1.08rem; max-width: 62ch; }
-.notice { border: 1px solid var(--rule); border-left: 3px solid var(--red); padding: 10px 14px; font-size: 0.84rem; color: var(--muted); }
+.notice { background: var(--paper); border: 1px solid var(--rule); border-left: 3px solid var(--red); padding: 10px 14px; font-size: 0.84rem; color: var(--muted); }
 .notice b { color: var(--ink); }
 
 /* controls */
 .controls { display: flex; flex-wrap: wrap; gap: 14px 26px; align-items: flex-end; padding-block: 18px; border-bottom: 1px solid var(--rule); }
 .ctl { display: flex; flex-direction: column; gap: 6px; }
-.seg { display: inline-flex; border: 1px solid var(--ink); }
+.seg { display: inline-flex; border: 1px solid var(--ink); background: var(--paper); }
 .seg button {
   font: 600 0.86rem var(--body); color: var(--ink); background: transparent; border: 0; padding: 7px 13px; cursor: pointer;
   border-right: 1px solid var(--ink);
@@ -91,7 +75,7 @@ p { margin: 0; }
 .seg button:last-child { border-right: 0; }
 .seg button[aria-pressed="true"] { background: var(--press); color: var(--press-ink); }
 button:focus-visible, select:focus-visible, a:focus-visible { outline: 3px solid var(--red); outline-offset: 2px; }
-select { font: 600 0.86rem var(--body); color: var(--ink); background: var(--bg); border: 1px solid var(--ink); border-radius: 0; padding: 7px 10px; max-width: 100%; }
+select { font: 600 0.86rem var(--body); color: var(--ink); background: var(--paper); border: 1px solid var(--ink); border-radius: 0; padding: 7px 10px; max-width: 100%; }
 
 /* map + sheet */
 .main { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr); gap: 0 36px; padding-block: 20px; align-items: start; }
@@ -99,11 +83,11 @@ select { font: 600 0.86rem var(--body); color: var(--ink); background: var(--bg)
 .maphead { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; flex-wrap: wrap; margin-bottom: 10px; }
 .hint { font-size: 0.82rem; color: var(--muted); }
 #map { width: 100%; height: auto; display: block; max-height: 80vh; }
-#map path { stroke: var(--bg); stroke-width: 0.4; cursor: pointer; }
+#map path { stroke: var(--paper); stroke-width: 0.4; cursor: pointer; }
 #map path.hov { stroke: var(--ink); stroke-width: 1.3; }
 #map path.sel { fill: var(--red); }
 #marker { pointer-events: none; }
-#marker path { fill: var(--red); stroke: var(--bg); stroke-width: 0.12; }
+#marker path { fill: var(--red); stroke: var(--paper); stroke-width: 0.12; }
 .b0 { fill: var(--none); } .b1 { fill: var(--s1); } .b2 { fill: var(--s2); } .b3 { fill: var(--s3); }
 .b4 { fill: var(--s4); } .b5 { fill: var(--s5); } .b6 { fill: var(--s6); }
 .legend { display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 0.8rem; color: var(--muted); align-items: center; margin-top: 10px; }
@@ -143,7 +127,7 @@ dd { margin: 0; font-weight: 600; text-align: right; font-variant-numeric: tabul
 .dot.hov { fill-opacity: 1; stroke: var(--ink); stroke-width: 1.5; }
 
 #tip {
-  position: fixed; pointer-events: none; z-index: 20; background: var(--bg); color: var(--ink);
+  position: fixed; pointer-events: none; z-index: 20; background: var(--paper); color: var(--ink);
   border: 1px solid var(--ink); padding: 7px 10px; font-size: 0.82rem; line-height: 1.35; max-width: 250px;
 }
 footer { border-top: 1px solid var(--rule); padding-top: 16px; font-size: 0.8rem; color: var(--muted); display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 18px 28px; }
