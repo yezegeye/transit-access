@@ -1,0 +1,476 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Chicago Transit Access</title>
+<meta name="description" content="How many jobs each Chicago neighborhood can reach by bus and train on a weekday morning, and how that varies with income. An independent project.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Oswald:wght@500;600&family=Libre+Franklin:wght@400;600;800&display=swap">
+<style>
+/* Layout: a civic map tool under a Chicago-flag masthead. Map and tract sheet side by side, findings below; one column on phones. */
+:root {
+  color-scheme: light;
+  --bg: #ffffff;
+  --ink: #10202f;
+  --muted: #4d5b69;
+  --rule: #d3dde6;
+  --sky: #41b6e6;          /* flag blue */
+  --red: #e4002b;          /* flag red: stars and the selected tract */
+  --press: #0b3a55;        /* pressed controls */
+  --press-ink: #ffffff;
+  --none: #edf1f4;         /* out of reach */
+  /* flag-blue scale, less -> more */
+  --s1: #e3f4fb; --s2: #b4e1f4; --s3: #7ccbec; --s4: #41b6e6; --s5: #1f8fc0; --s6: #0b4a6b;
+  --q1: #41b6e6; --q2: #1f8fc0; --q3: #146b94; --q4: #0b3a55;
+  --dot: #1f8fc0;
+  --display: "Oswald", "Arial Narrow", "Helvetica Neue", sans-serif;
+  --body: "Libre Franklin", "Franklin Gothic Medium", "Helvetica Neue", Arial, sans-serif;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --bg: #0a1520; --ink: #e6f0f6; --muted: #94a6b6; --rule: #22384a;
+    --sky: #41b6e6; --red: #ff4d6a; --press: #41b6e6; --press-ink: #0a1520; --none: #13212e;
+    --s1: #12324a; --s2: #145a80; --s3: #1f8fc0; --s4: #41b6e6; --s5: #86d0ef; --s6: #c9ecfa;
+    --q1: #145a80; --q2: #1f8fc0; --q3: #41b6e6; --q4: #a9def4;
+    --dot: #41b6e6;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #0a1520; --ink: #e6f0f6; --muted: #94a6b6; --rule: #22384a;
+  --sky: #41b6e6; --red: #ff4d6a; --press: #41b6e6; --press-ink: #0a1520; --none: #13212e;
+  --s1: #12324a; --s2: #145a80; --s3: #1f8fc0; --s4: #41b6e6; --s5: #86d0ef; --s6: #c9ecfa;
+  --q1: #145a80; --q2: #1f8fc0; --q3: #41b6e6; --q4: #a9def4;
+  --dot: #41b6e6;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body {
+  background: var(--bg); color: var(--ink); font-family: var(--body); font-size: 15px; line-height: 1.5;
+  padding-bottom: 48px;
+}
+.gutter {
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+}
+.wrap { max-width: 1140px; margin: 0 auto; }
+
+/* masthead: the flag's two blue stripes with the four red stars between them */
+.flag { display: grid; grid-template-rows: 14px auto 14px; }
+.flag .stripe { background: var(--sky); }
+.flag .band { padding-block: 14px; }
+.masthead { display: flex; align-items: center; gap: 18px; flex-wrap: wrap; }
+.stars { display: flex; gap: 6px; flex: none; }
+.stars svg { width: 26px; height: 26px; display: block; }
+.star { fill: var(--red); }
+h1 {
+  font-family: var(--display); font-weight: 600; font-size: clamp(1.7rem, 4vw, 2.5rem);
+  text-transform: uppercase; letter-spacing: 0.02em; line-height: 1; margin: 0;
+}
+h2 { font-family: var(--display); font-weight: 500; font-size: 1.35rem; text-transform: uppercase; letter-spacing: 0.03em; margin: 0; line-height: 1.1; }
+p { margin: 0; }
+.kicker { font-family: var(--display); font-weight: 500; text-transform: uppercase; letter-spacing: 0.08em; font-size: 0.8rem; color: var(--muted); }
+
+.intro { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr); gap: 20px 36px; padding-block: 20px 6px; align-items: start; }
+@media (max-width: 860px) { .intro { grid-template-columns: 1fr; } }
+.lede { font-size: 1.08rem; max-width: 62ch; }
+.notice { border: 1px solid var(--rule); border-left: 3px solid var(--red); padding: 10px 14px; font-size: 0.84rem; color: var(--muted); }
+.notice b { color: var(--ink); }
+
+/* controls */
+.controls { display: flex; flex-wrap: wrap; gap: 14px 26px; align-items: flex-end; padding-block: 18px; border-bottom: 1px solid var(--rule); }
+.ctl { display: flex; flex-direction: column; gap: 6px; }
+.seg { display: inline-flex; border: 1px solid var(--ink); }
+.seg button {
+  font: 600 0.86rem var(--body); color: var(--ink); background: transparent; border: 0; padding: 7px 13px; cursor: pointer;
+  border-right: 1px solid var(--ink);
+}
+.seg button:last-child { border-right: 0; }
+.seg button[aria-pressed="true"] { background: var(--press); color: var(--press-ink); }
+button:focus-visible, select:focus-visible, a:focus-visible { outline: 3px solid var(--red); outline-offset: 2px; }
+select { font: 600 0.86rem var(--body); color: var(--ink); background: var(--bg); border: 1px solid var(--ink); border-radius: 0; padding: 7px 10px; max-width: 100%; }
+
+/* map + sheet */
+.main { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr); gap: 0 36px; padding-block: 20px; align-items: start; }
+@media (max-width: 860px) { .main { grid-template-columns: 1fr; gap: 24px; } }
+.maphead { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; flex-wrap: wrap; margin-bottom: 10px; }
+.hint { font-size: 0.82rem; color: var(--muted); }
+#map { width: 100%; height: auto; display: block; max-height: 80vh; }
+#map path { stroke: var(--bg); stroke-width: 0.4; cursor: pointer; }
+#map path.hov { stroke: var(--ink); stroke-width: 1.3; }
+#map path.sel { fill: var(--red); }
+#marker { pointer-events: none; }
+#marker path { fill: var(--red); stroke: var(--bg); stroke-width: 0.12; }
+.b0 { fill: var(--none); } .b1 { fill: var(--s1); } .b2 { fill: var(--s2); } .b3 { fill: var(--s3); }
+.b4 { fill: var(--s4); } .b5 { fill: var(--s5); } .b6 { fill: var(--s6); }
+.legend { display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 0.8rem; color: var(--muted); align-items: center; margin-top: 10px; }
+.legend span { display: inline-flex; align-items: center; gap: 5px; }
+.legend i { width: 14px; height: 14px; display: inline-block; }
+.loading { padding: 80px 0; color: var(--muted); text-align: center; }
+
+.sheet { border-left: 1px solid var(--rule); padding-left: 28px; display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+@media (max-width: 860px) { .sheet { border-left: 0; padding-left: 0; border-top: 1px solid var(--rule); padding-top: 18px; } }
+.place .name { font-family: var(--display); font-size: 2.3rem; font-weight: 600; line-height: 1; text-transform: uppercase; letter-spacing: 0.01em; display: block; margin-top: 4px; }
+.place .sub { color: var(--muted); font-size: 0.88rem; }
+dl { display: grid; grid-template-columns: 1fr auto; gap: 7px 14px; font-size: 0.92rem; margin: 0; }
+dt { color: var(--muted); }
+dd { margin: 0; font-weight: 600; text-align: right; font-variant-numeric: tabular-nums; }
+.big { border-top: 3px solid var(--ink); padding-top: 12px; display: flex; flex-direction: column; gap: 8px; }
+.big .value { font-family: var(--display); font-size: 2.9rem; font-weight: 600; line-height: 1; font-variant-numeric: tabular-nums; }
+.big .value small { font-family: var(--body); font-size: 0.9rem; font-weight: 400; color: var(--muted); margin-left: 8px; }
+.meter { position: relative; height: 10px; background: var(--none); margin-top: 20px; }
+.meter .fill { position: absolute; inset: 0 auto 0 0; background: var(--red); }
+.meter .tick { position: absolute; top: -6px; bottom: -6px; width: 2px; background: var(--ink); }
+.meter .ticklabel { position: absolute; top: -22px; transform: translateX(-50%); font-size: 0.74rem; color: var(--muted); white-space: nowrap; }
+.scale { display: flex; justify-content: space-between; font-size: 0.74rem; color: var(--muted); }
+.note { font-size: 0.82rem; color: var(--muted); }
+
+/* findings */
+.findings { border-top: 3px solid var(--ink); padding-block: 18px; display: flex; flex-direction: column; gap: 14px; }
+.finding { font-size: 1.05rem; max-width: 72ch; }
+.finding strong { font-variant-numeric: tabular-nums; }
+.charts { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.3fr); gap: 28px; }
+@media (max-width: 860px) { .charts { grid-template-columns: 1fr; } }
+.chart svg { width: 100%; height: auto; display: block; overflow: visible; margin-top: 8px; }
+.chart text { fill: var(--muted); font-family: var(--body); font-size: 11px; }
+.chart .val { fill: var(--ink); font-weight: 600; font-size: 12px; }
+.chart .grid { stroke: var(--rule); stroke-width: 1; }
+.chart .axis { stroke: var(--ink); stroke-width: 1; }
+.dot { fill: var(--dot); fill-opacity: 0.45; cursor: pointer; }
+.dot.hov { fill-opacity: 1; stroke: var(--ink); stroke-width: 1.5; }
+
+#tip {
+  position: fixed; pointer-events: none; z-index: 20; background: var(--bg); color: var(--ink);
+  border: 1px solid var(--ink); padding: 7px 10px; font-size: 0.82rem; line-height: 1.35; max-width: 250px;
+}
+footer { border-top: 1px solid var(--rule); padding-top: 16px; font-size: 0.8rem; color: var(--muted); display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 18px 28px; }
+@media (max-width: 860px) { footer { grid-template-columns: 1fr; } }
+footer b { color: var(--ink); }
+footer a { color: var(--ink); }
+@media (prefers-reduced-motion: no-preference) { #map path { transition: fill 0.2s; } }
+</style>
+</head>
+<body>
+
+<div class="flag" role="banner">
+  <div class="stripe"></div>
+  <div class="band gutter"><div class="wrap masthead">
+    <div class="stars" aria-hidden="true" id="stars"></div>
+    <h1>Chicago Transit Access</h1>
+  </div></div>
+  <div class="stripe"></div>
+</div>
+
+<main class="gutter"><div class="wrap">
+  <section class="intro">
+    <p class="lede">How many jobs can you reach from your part of Chicago by bus and train on a weekday morning? <b>Pick a census tract on the map</b> to see how far the city stretches from there, and how access lines up with income.</p>
+    <p class="notice"><b>Independent project.</b> Not affiliated with or endorsed by the Chicago Transit Authority or the City of Chicago. Travel times are estimates from published CTA schedules for one weekday (Wed 18 Nov 2026), not a trip planner.</p>
+  </section>
+
+  <div class="controls" role="group" aria-label="Map settings">
+    <div class="ctl"><span class="kicker" id="lv">Map shows</span>
+      <div class="seg" aria-labelledby="lv" id="view">
+        <button type="button" data-v="time" aria-pressed="true">Travel time from selected</button>
+        <button type="button" data-v="jobs" aria-pressed="false">Jobs reachable</button>
+      </div></div>
+    <div class="ctl"><span class="kicker" id="lt">Commute limit</span>
+      <div class="seg" aria-labelledby="lt" id="thr">
+        <button type="button" data-v="30" aria-pressed="false">30 min</button>
+        <button type="button" data-v="45" aria-pressed="true">45 min</button>
+        <button type="button" data-v="60" aria-pressed="false">60 min</button>
+      </div></div>
+    <div class="ctl"><span class="kicker" id="lx">Time to change buses or trains</span>
+      <div class="seg" aria-labelledby="lx" id="xfer">
+        <button type="button" data-v="0" aria-pressed="false">0 min</button>
+        <button type="button" data-v="2" aria-pressed="true">2 min</button>
+        <button type="button" data-v="5" aria-pressed="false">5 min</button>
+      </div></div>
+    <div class="ctl"><label class="kicker" for="hood">Go to a community area</label>
+      <select id="hood"></select></div>
+  </div>
+
+  <div class="main">
+    <div>
+      <div class="maphead"><h2 id="maptitle">Loading</h2><span class="hint" id="maphint"></span></div>
+      <svg id="map" role="img" aria-label="Map of Chicago census tracts"><text x="50%" y="40" text-anchor="middle" class="loading">Loading map data</text></svg>
+      <div class="legend" id="legend"></div>
+    </div>
+
+    <aside class="sheet" aria-live="polite">
+      <div class="place"><span class="kicker">Selected tract</span><span class="name" id="pname">&nbsp;</span><span class="sub" id="psub"></span></div>
+      <dl id="facts"></dl>
+      <div class="big">
+        <span class="kicker" id="bigLabel"></span>
+        <span class="value" id="bigValue"></span>
+        <div class="meter" id="meter"></div>
+        <div class="scale"><span>0</span><span id="meterMax"></span></div>
+        <span class="note" id="rank"></span>
+      </div>
+      <dl id="facts2"></dl>
+    </aside>
+  </div>
+
+  <section class="findings">
+    <h2>Who gets access</h2>
+    <p class="finding" id="finding"></p>
+    <div class="charts">
+      <div class="chart"><span class="kicker" id="barTitle"></span><svg id="bars" role="img"></svg></div>
+      <div class="chart"><span class="kicker" id="scTitle"></span><svg id="scatter" role="img"></svg></div>
+    </div>
+  </section>
+
+  <footer>
+    <p><b>How the numbers were made.</b> A transit router written in C++ computed door-to-door travel times from each tract's population center to every Cook County tract, leaving every minute from 7 to 9 AM, and kept the median trip. Walks: up to 800 m to and from stops and 400 m between them, at 5 km/h along streets. Jobs reachable counts every job in Cook County tracts within the limit.</p>
+    <p><b>What it leaves out.</b> CTA buses and trains only, no Metra or Pace. Scheduled service only, with no delays. Walking distances are straight lines with an average detour. Reachable jobs measure opportunity, not who works where. The travel-time map uses 2-minute transfers.</p>
+    <p><b>Data.</b> Chicago Transit Authority GTFS schedules; U.S. Census Bureau ACS 2020–2024 and LEHD LODES 2024 jobs; 2020 tract boundaries; City of Chicago community areas. Code and method: <a href="https://github.com/yezegeye/transit-access">github.com/yezegeye/transit-access</a>.</p>
+  </footer>
+</div></main>
+<div id="tip" hidden></div>
+
+<script>
+(function () {
+  const NS = 'http://www.w3.org/2000/svg';
+  const STAR = 'M0,-1L0.289,-0.5L0.866,-0.5L0.577,0L0.866,0.5L0.289,0.5L0,1L-0.289,0.5L-0.866,0.5L-0.577,0L-0.866,-0.5L-0.289,-0.5Z';
+  const el = (n, a = {}) => { const e = document.createElementNS(NS, n); for (const k in a) e.setAttribute(k, a[k]); return e; };
+
+  const stars = document.getElementById('stars');
+  for (let i = 0; i < 4; i++) {
+    const s = el('svg', { viewBox: '-1 -1 2 2' });
+    s.appendChild(el('path', { d: STAR, class: 'star' }));
+    stars.appendChild(s);
+  }
+
+  fetch('data.json').then(r => {
+    if (!r.ok) throw new Error(r.status);
+    return r.json();
+  }).then(start).catch(() => {
+    document.getElementById('maptitle').textContent = 'Map data did not load';
+    document.getElementById('maphint').textContent = 'Reload the page, or open it through a web server rather than as a file.';
+  });
+
+  function start(D) {
+    const T = D.tracts, N = T.length;
+    const raw = atob(D.tt);
+    const TT = new Uint8Array(raw.length);
+    for (let i = 0; i < raw.length; i++) TT[i] = raw.charCodeAt(i);
+    const fmt = n => n.toLocaleString('en-US');
+    const fmtK = n => n >= 1e6 ? (n / 1e6).toFixed(2).replace(/0$/, '') + 'M' : Math.round(n / 1000) + 'K';
+    const QNAME = { Q1: 'Lowest-income quarter', Q2: 'Second quarter', Q3: 'Third quarter', Q4: 'Highest-income quarter' };
+    const tractName = t => 'Tract ' + (parseInt(t.id, 10) / 100);
+    const median = a => { const s = [...a].sort((x, y) => x - y), m = s.length >> 1; return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2; };
+
+    let initial = T.findIndex(t => t.ca === 'Austin' && t.id === '250200');
+    if (initial < 0) initial = 0;
+    const state = { sel: initial, view: 'time', thr: '45', xfer: '2', hov: -1 };
+    const jobs = () => D.jobs[state.xfer][state.thr];
+    const minutes = (o, d) => TT[o * N + d];
+
+    /* map */
+    const map = document.getElementById('map');
+    map.innerHTML = '';
+    map.setAttribute('viewBox', `0 0 ${D.w} ${D.h}`);
+    const layer = el('g');
+    map.appendChild(layer);
+    const marker = el('g', { id: 'marker' });
+    marker.appendChild(el('path', { d: STAR }));
+    map.appendChild(marker);
+    const paths = D.paths.map((d, i) => {
+      const p = el('path', { d });
+      p.addEventListener('mousemove', e => { hover(i); showTip(e, tipText(i)); });
+      p.addEventListener('mouseleave', () => { hover(-1); hideTip(); });
+      p.addEventListener('click', () => select(i));
+      layer.appendChild(p);
+      return p;
+    });
+    const centers = paths.map(p => { const b = p.getBBox(); return [b.x + b.width / 2, b.y + b.height / 2]; });
+
+    const TIME_BINS = [[15, 'b6', '15 min or less'], [30, 'b5', '15–30'], [45, 'b4', '30–45'], [60, 'b2', '45–60']];
+    const JOB_BINS = [[100e3, 'b1', 'under 100K'], [300e3, 'b2', '100–300K'], [600e3, 'b3', '300–600K'], [900e3, 'b4', '600–900K'], [1.2e6, 'b5', '900K–1.2M'], [Infinity, 'b6', '1.2M or more']];
+    const timeBin = m => { if (m > 60) return 'b0'; for (const [b, c] of TIME_BINS) if (m <= b) return c; return 'b0'; };
+    const jobBin = v => { for (const [b, c] of JOB_BINS) if (v < b) return c; return 'b6'; };
+    const swatch = (c, label) => `<span><i style="background:var(--${c === 'b0' ? 'none' : 's' + c.slice(1)})"></i>${label}</span>`;
+
+    function paintMap() {
+      const J = jobs();
+      paths.forEach((p, i) => {
+        let c = state.view === 'time' ? timeBin(minutes(state.sel, i)) : jobBin(J[i]);
+        if (i === state.sel) c += ' sel';
+        if (i === state.hov) c += ' hov';
+        p.setAttribute('class', c);
+      });
+      if (state.hov >= 0) layer.appendChild(paths[state.hov]);
+      layer.appendChild(paths[state.sel]);
+      const [cx, cy] = centers[state.sel];
+      marker.setAttribute('transform', `translate(${cx},${cy - 13}) scale(9)`);
+      const legend = document.getElementById('legend');
+      const sel = `<span><i style="background:var(--red)"></i>selected tract</span>`;
+      if (state.view === 'time') {
+        legend.innerHTML = '<span class="kicker">Median trip</span>' + TIME_BINS.map(([, c, l]) => swatch(c, l)).join('') + swatch('b0', 'over 60 min') + sel;
+        document.getElementById('maptitle').textContent = `Travel time from ${T[state.sel].ca}`;
+        document.getElementById('maphint').textContent = 'Leaving 7–9 AM, 2-min transfers';
+      } else {
+        legend.innerHTML = `<span class="kicker">Jobs within ${state.thr} min</span>` + JOB_BINS.map(([, c, l]) => swatch(c, l)).join('') + sel;
+        document.getElementById('maptitle').textContent = `Jobs reachable within ${state.thr} minutes`;
+        document.getElementById('maphint').textContent = `${state.xfer}-min transfers`;
+      }
+    }
+
+    let dots = [];
+    function hover(i) {
+      if (state.hov === i) return;
+      state.hov = i;
+      paintMap();
+      dots.forEach((d, k) => d && d.classList.toggle('hov', k === i));
+    }
+
+    /* tooltip */
+    const tip = document.getElementById('tip');
+    function tipText(i) {
+      const t = T[i];
+      let line;
+      if (state.view === 'time') {
+        const m = minutes(state.sel, i);
+        line = i === state.sel ? 'selected tract' : (m > 60 ? 'over 60 min' : `${m} min from ${T[state.sel].ca}`);
+      } else line = `${fmt(jobs()[i])} jobs within ${state.thr} min`;
+      return `<b>${t.ca}</b>, ${tractName(t)}<br>${line}`;
+    }
+    function showTip(e, html) {
+      tip.innerHTML = html; tip.hidden = false;
+      const r = tip.getBoundingClientRect();
+      let x = e.clientX + 14, y = e.clientY + 14;
+      if (x + r.width > innerWidth - 8) x = e.clientX - r.width - 14;
+      if (y + r.height > innerHeight - 8) y = e.clientY - r.height - 14;
+      tip.style.left = x + 'px'; tip.style.top = y + 'px';
+    }
+    function hideTip() { tip.hidden = true; }
+
+    /* tract sheet */
+    function paintSheet() {
+      const t = T[state.sel], J = jobs(), v = J[state.sel];
+      document.getElementById('pname').textContent = t.ca;
+      document.getElementById('psub').textContent = `${tractName(t)}, Cook County`;
+      const rows = [
+        ['Median household income', t.inc == null ? 'not published' : '$' + fmt(t.inc)],
+        ['Income group', t.q ? QNAME[t.q] : 'none (no estimate)'],
+        ['Households without a car', t.nocar == null ? 'no data' : Math.round(t.nocar * 100) + '%'],
+        ['Residents', t.pop == null ? 'no data' : fmt(t.pop)],
+      ];
+      document.getElementById('facts').innerHTML = rows.map(([a, b]) => `<dt>${a}</dt><dd>${b}</dd>`).join('');
+      document.getElementById('bigLabel').textContent = `Jobs reachable within ${state.thr} minutes`;
+      document.getElementById('bigValue').innerHTML = `${fmt(v)}<small>${(100 * v / D.total_jobs).toFixed(1)}% of Cook County's jobs</small>`;
+      const max = Math.max(...J), med = median(J);
+      document.getElementById('meter').innerHTML =
+        `<div class="fill" style="width:${100 * v / max}%"></div><div class="tick" style="left:${100 * med / max}%"></div>` +
+        `<span class="ticklabel" style="left:${100 * med / max}%">city median ${fmtK(med)}</span>`;
+      document.getElementById('meterMax').textContent = 'best-connected tract ' + fmtK(max);
+      const rank = 1 + J.filter(x => x > v).length;
+      document.getElementById('rank').textContent = `Ranks ${rank} of ${N} Chicago tracts with ${state.xfer}-minute transfers.`;
+      const rows2 = [
+        ['Low-wage jobs within 45 min', fmt(D.jobs[state.xfer].low45[state.sel])],
+        ['Median trip to the Loop', t.loop == null ? 'over 60 min' : t.loop + ' min'],
+      ];
+      document.getElementById('facts2').innerHTML = rows2.map(([a, b]) => `<dt>${a}</dt><dd>${b}</dd>`).join('');
+      document.getElementById('hood').value = t.ca;
+    }
+
+    /* findings */
+    const bars = document.getElementById('bars'), scatter = document.getElementById('scatter');
+    function quartileMeans() {
+      const J = jobs(), sum = { Q1: 0, Q2: 0, Q3: 0, Q4: 0 }, n = { Q1: 0, Q2: 0, Q3: 0, Q4: 0 };
+      T.forEach((t, i) => { if (t.q) { sum[t.q] += J[i]; n[t.q]++; } });
+      return ['Q1', 'Q2', 'Q3', 'Q4'].map(q => ({ q, mean: sum[q] / n[q] }));
+    }
+    function paintBars() {
+      const qs = quartileMeans(), W = 360, H = 250, L = 46, R = 8, Tp = 22, B = 44;
+      bars.setAttribute('viewBox', `0 0 ${W} ${H}`); bars.innerHTML = '';
+      const y = v => Tp + (H - Tp - B) * (1 - v / 1.3e6);
+      for (let g = 0; g <= 1.2e6; g += 0.4e6) {
+        bars.appendChild(el('line', { x1: L, x2: W - R, y1: y(g), y2: y(g), class: 'grid' }));
+        const t = el('text', { x: L - 6, y: y(g) + 4, 'text-anchor': 'end' }); t.textContent = g ? fmtK(g) : '0'; bars.appendChild(t);
+      }
+      const bw = (W - L - R) / 4, gap = 16, selQ = T[state.sel].q;
+      qs.forEach((d, k) => {
+        const x = L + k * bw + gap / 2, w = bw - gap, top = y(d.mean);
+        const b = el('rect', { x, y: top, width: w, height: y(0) - top, style: `fill:var(--q${k + 1})` });
+        b.addEventListener('mousemove', e => showTip(e, `<b>${QNAME[d.q]}</b><br>average ${fmt(Math.round(d.mean))} jobs within ${state.thr} min`));
+        b.addEventListener('mouseleave', hideTip);
+        bars.appendChild(b);
+        const v = el('text', { x: x + w / 2, y: top - 6, 'text-anchor': 'middle', class: 'val' }); v.textContent = fmtK(d.mean); bars.appendChild(v);
+        const lab = el('text', { x: x + w / 2, y: H - B + 16, 'text-anchor': 'middle' });
+        lab.textContent = { Q1: 'Lowest', Q2: 'Second', Q3: 'Third', Q4: 'Highest' }[d.q]; bars.appendChild(lab);
+        if (d.q === selQ) {
+          const g = el('g', { transform: `translate(${x + w / 2},${H - B + 30}) scale(6)` });
+          g.appendChild(el('path', { d: STAR, style: 'fill:var(--red)' }));
+          bars.appendChild(g);
+        }
+      });
+      bars.appendChild(el('line', { x1: L, x2: W - R, y1: y(0), y2: y(0), class: 'axis' }));
+      const ratio = qs[3].mean / qs[0].mean;
+      document.getElementById('barTitle').textContent = `Average jobs within ${state.thr} min, by income quarter`;
+      bars.setAttribute('aria-label', `Average jobs reachable within ${state.thr} minutes by income quarter; the highest quarter reaches ${ratio.toFixed(1)} times as many as the lowest.`);
+      document.getElementById('finding').innerHTML =
+        `Tracts in the highest-income quarter reach <strong>${ratio.toFixed(1)} times</strong> as many jobs within ${state.thr} minutes as tracts in the lowest-income quarter ` +
+        `(${fmtK(qs[3].mean)} against ${fmtK(qs[0].mean)} on average, with ${state.xfer}-minute transfers). ` +
+        `The lowest-income quarter also relies on transit the most: 36% of its households have no car.`;
+    }
+    function paintScatter() {
+      const J = jobs(), W = 470, H = 250, L = 46, R = 10, Tp = 12, B = 34;
+      scatter.setAttribute('viewBox', `0 0 ${W} ${H}`); scatter.innerHTML = '';
+      const lx0 = Math.log(10000), lx1 = Math.log(260000);
+      const x = v => L + (W - L - R) * (Math.log(Math.max(v, 10000)) - lx0) / (lx1 - lx0);
+      const y = v => Tp + (H - Tp - B) * (1 - v / 1.45e6);
+      for (let g = 0; g <= 1.4e6; g += 0.35e6) {
+        scatter.appendChild(el('line', { x1: L, x2: W - R, y1: y(g), y2: y(g), class: 'grid' }));
+        const t = el('text', { x: L - 6, y: y(g) + 4, 'text-anchor': 'end' }); t.textContent = g ? fmtK(g) : '0'; scatter.appendChild(t);
+      }
+      for (const v of [20000, 50000, 100000, 200000]) {
+        const t = el('text', { x: x(v), y: H - B + 16, 'text-anchor': 'middle' }); t.textContent = '$' + v / 1000 + 'K'; scatter.appendChild(t);
+      }
+      const xl = el('text', { x: (L + W - R) / 2, y: H - 2, 'text-anchor': 'middle' }); xl.textContent = 'Median household income (log scale)'; scatter.appendChild(xl);
+      scatter.appendChild(el('line', { x1: L, x2: W - R, y1: y(0), y2: y(0), class: 'axis' }));
+      dots = new Array(N).fill(null);
+      T.forEach((t, i) => {
+        if (t.inc == null || i === state.sel) return;
+        const c = el('circle', { cx: x(t.inc), cy: y(J[i]), r: 3, class: 'dot' });
+        c.addEventListener('mousemove', e => { hover(i); showTip(e, `<b>${t.ca}</b>, ${tractName(t)}<br>$${fmt(t.inc)} income, ${fmt(J[i])} jobs`); });
+        c.addEventListener('mouseleave', () => { hover(-1); hideTip(); });
+        c.addEventListener('click', () => select(i));
+        scatter.appendChild(c); dots[i] = c;
+      });
+      const s = T[state.sel];
+      if (s.inc != null) {
+        const g = el('g', { transform: `translate(${x(s.inc)},${y(J[state.sel])}) scale(8)` });
+        g.appendChild(el('path', { d: STAR, style: 'fill:var(--red);stroke:var(--bg);stroke-width:0.15' }));
+        scatter.appendChild(g);
+      }
+      document.getElementById('scTitle').textContent = `Every Chicago tract: income and jobs within ${state.thr} min`;
+      scatter.setAttribute('aria-label', `Scatter plot of median household income against jobs reachable within ${state.thr} minutes for each Chicago tract.`);
+    }
+
+    /* controls */
+    function wire(id, key) {
+      const seg = document.getElementById(id);
+      seg.addEventListener('click', e => {
+        const b = e.target.closest('button'); if (!b) return;
+        state[key] = b.dataset.v;
+        seg.querySelectorAll('button').forEach(x => x.setAttribute('aria-pressed', x === b ? 'true' : 'false'));
+        render();
+      });
+    }
+    wire('view', 'view'); wire('thr', 'thr'); wire('xfer', 'xfer');
+    const hood = document.getElementById('hood'), biggest = {};
+    T.forEach((t, i) => { if (biggest[t.ca] === undefined || (t.pop || 0) > (T[biggest[t.ca]].pop || 0)) biggest[t.ca] = i; });
+    Object.keys(biggest).sort().forEach(name => { const o = document.createElement('option'); o.value = name; o.textContent = name; hood.appendChild(o); });
+    hood.addEventListener('change', () => select(biggest[hood.value]));
+
+    function select(i) { state.sel = i; render(); }
+    function render() { paintMap(); paintSheet(); paintBars(); paintScatter(); }
+    render();
+  }
+})();
+</script>
+</body>
+</html>

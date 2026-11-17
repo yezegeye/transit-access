@@ -18,6 +18,10 @@ under every transfer-time assumption tested, and grows when transfers are
 slower. Details in [Access and income](#access-and-income); every setting
 and data source is in [docs/decisions.md](docs/decisions.md).
 
+**Explore it:** [yezegeye.github.io/transit-access](https://yezegeye.github.io/transit-access/)
+is an interactive map: pick any tract to see travel times from it, the jobs
+it can reach and how it compares by income.
+
 ![Jobs reachable by transit from each Chicago tract](results/job_access_map.png)
 
 ## Reproduce
@@ -288,8 +292,10 @@ with transfers. The conclusion holds at every setting.
 - `cpp/bench/` — `bench_matrix`, a timing harness for the full analysis workload
 - `python/tests/` — pytest tests against the compiled module
 - `analysis/` — Python analysis scripts (`prep_data.py`, `job_access.py`,
-  `plot_job_access.py`, `equity.py`, `sensitivity.py`, `check_trips.py`,
-  `benchmark.py`) and their tests
+  `plot_job_access.py`, `equity.py`, `sensitivity.py`, `export_web.py`,
+  `check_trips.py`, `benchmark.py`) and their tests
+- `web/` — the interactive website (`index.html`, plus `data.json` written by
+  `analysis/export_web.py`), deployed to GitHub Pages on every push to `main`
 - `results/` — figures and result tables (`access.csv`, `equity.csv`,
   `sensitivity.csv`, `benchmark.csv`)
 - `data/fixtures/` — small hand-made GTFS feeds used by the tests
