@@ -2,12 +2,13 @@
 #
 #   make            build, run all tests, download data, regenerate every result
 #   make results    just the analysis (data, job access, maps, equity, sensitivity)
+#   make web        the website's data file, then serve it at http://localhost:8000
 #   make benchmark  C++ vs. Python timings and the full-workload timing
 
 PYTHON ?= python
 BUILD  ?= build
 
-.PHONY: all build test data results benchmark clean
+.PHONY: all build test data results web benchmark clean
 
 all: build test results
 
@@ -31,6 +32,11 @@ results: build data
 	$(PYTHON) analysis/plot_job_access.py
 	$(PYTHON) analysis/equity.py
 	$(PYTHON) analysis/sensitivity.py
+	$(PYTHON) analysis/export_web.py
+
+web:
+	$(PYTHON) analysis/export_web.py
+	$(PYTHON) -m http.server 8000 --directory web
 
 benchmark: build
 	$(PYTHON) analysis/benchmark.py
